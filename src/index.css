@@ -1,0 +1,283 @@
+@import "tailwindcss";
+
+/* ───────── WEFT design tokens ─────────
+   Dark ink base. Era palettes swap a single accent family.
+   Fraunces = display, Newsreader = prose, IBM Plex Mono = utility. */
+
+:root {
+  --ink-0: #0d0b09;
+  --ink-1: #15120e;
+  --ink-2: #1e1a14;
+  --ink-3: #2a241c;
+  --line: rgba(235, 220, 195, 0.09);
+  --line-strong: rgba(235, 220, 195, 0.18);
+  --text-hi: #ece4d4;
+  --text-mid: #b3a78f;
+  --text-lo: #7d735f;
+  --accent: #d98e4a;          /* ember default */
+  --accent-soft: rgba(217, 142, 74, 0.16);
+  --accent-glow: rgba(217, 142, 74, 0.32);
+  --danger: #c75146;
+  --calm: #7da27f;
+  --font-display: "Fraunces", serif;
+  --font-prose: "Newsreader", serif;
+  --font-mono: "IBM Plex Mono", monospace;
+}
+
+[data-theme="ember"]     { --accent: #d98e4a; --accent-soft: rgba(217,142,74,.16); --accent-glow: rgba(217,142,74,.32); }
+[data-theme="verdigris"] { --accent: #5fae9b; --accent-soft: rgba(95,174,155,.15); --accent-glow: rgba(95,174,155,.30); }
+[data-theme="rust"]      { --accent: #c96f4a; --accent-soft: rgba(201,111,74,.16); --accent-glow: rgba(201,111,74,.32); }
+[data-theme="frost"]     { --accent: #8fb6cc; --accent-soft: rgba(143,182,204,.14); --accent-glow: rgba(143,182,204,.30); }
+
+html, body, #root { height: 100%; }
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  background:
+    radial-gradient(120% 90% at 50% -10%, var(--ink-2) 0%, var(--ink-0) 58%),
+    var(--ink-0);
+  color: var(--text-hi);
+  font-family: var(--font-prose);
+  font-optical-sizing: auto;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.font-display { font-family: var(--font-display); }
+.font-prose   { font-family: var(--font-prose); }
+.font-mono    { font-family: var(--font-mono); }
+
+/* app shell */
+.shell {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+.topbar {
+  padding-top: env(safe-area-inset-top);
+  background: color-mix(in srgb, var(--ink-0) 72%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  backdrop-filter: blur(18px) saturate(1.3);
+  border-bottom: 1px solid var(--line);
+}
+.tabbar {
+  padding-bottom: max(env(safe-area-inset-bottom), 10px);
+  background: color-mix(in srgb, var(--ink-0) 78%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  backdrop-filter: blur(18px) saturate(1.3);
+  border-top: 1px solid var(--line);
+}
+
+/* cards & chrome */
+.card {
+  background: linear-gradient(180deg, var(--ink-2), var(--ink-1));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.card-press { transition: transform .18s cubic-bezier(.2,.9,.3,1.2), border-color .18s; }
+.card-press:active { transform: scale(.985); border-color: var(--line-strong); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text-mid);
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 3px 9px;
+}
+.chip-accent { color: var(--accent); border-color: var(--accent-glow); background: var(--accent-soft); }
+
+/* prose stream */
+.prose-stream p {
+  margin: 0 0 1.05em;
+  font-size: 17px;
+  line-height: 1.62;
+  color: var(--text-hi);
+  animation: rise .5s cubic-bezier(.16,.84,.3,1) both;
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.player-echo {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--accent);
+  border-left: 2px solid var(--accent-glow);
+  padding: 2px 0 2px 12px;
+  margin: 1.4em 0 1.1em;
+  opacity: .92;
+}
+
+/* seismograph strip */
+.seismo {
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--ink-1);
+  overflow: hidden;
+}
+
+/* inputs */
+.field {
+  width: 100%;
+  background: var(--ink-1);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--text-hi);
+  font-family: var(--font-prose);
+  font-size: 16px;            /* prevents iOS zoom-on-focus */
+  padding: 12px 14px;
+  outline: none;
+  transition: border-color .15s;
+}
+.field:focus { border-color: var(--accent-glow); }
+textarea.field { resize: none; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: .05em; text-transform: uppercase;
+  border-radius: 12px; padding: 11px 16px;
+  border: 1px solid var(--line-strong);
+  color: var(--text-hi); background: var(--ink-3);
+  transition: transform .15s cubic-bezier(.2,.9,.3,1.3), background .15s, opacity .15s;
+  user-select: none; -webkit-user-select: none;
+}
+.btn:active { transform: scale(.96); }
+.btn[disabled] { opacity: .4; pointer-events: none; }
+.btn-accent { background: var(--accent); color: var(--ink-0); border-color: transparent; font-weight: 600; }
+.btn-ghost  { background: transparent; border-color: var(--line); color: var(--text-mid); }
+.btn-danger { background: transparent; border-color: rgba(199,81,70,.45); color: var(--danger); }
+
+/* meters */
+.meter { height: 5px; border-radius: 999px; background: var(--ink-3); overflow: hidden; }
+.meter > div { height: 100%; border-radius: 999px; background: var(--accent); transition: width .6s cubic-bezier(.2,.8,.2,1); }
+
+/* scrollbars away on mobile feel */
+.scroll-y { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.scroll-y::-webkit-scrollbar { width: 0; height: 0; }
+
+/* drawer */
+.drawer-veil { background: rgba(8,6,4,.62); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+.drawer {
+  background: linear-gradient(180deg, var(--ink-2), var(--ink-1));
+  border-top: 1px solid var(--line-strong);
+  border-radius: 20px 20px 0 0;
+  padding-bottom: max(env(safe-area-inset-bottom), 16px);
+  box-shadow: 0 -24px 60px rgba(0,0,0,.5);
+}
+.grab { width: 38px; height: 4px; border-radius: 999px; background: var(--line-strong); margin: 10px auto 4px; }
+
+/* thinking shimmer */
+.shimmer {
+  background: linear-gradient(90deg, var(--text-lo) 25%, var(--text-hi) 50%, var(--text-lo) 75%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent;
+  animation: shimmer 1.6s linear infinite;
+}
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+hr.rule { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+
+/* ───────── light mode ───────── */
+[data-mode="light"] {
+  --ink-0: #f2ecdf;
+  --ink-1: #eae2d2;
+  --ink-2: #e2d8c5;
+  --ink-3: #d4c8b0;
+  --line: rgba(60, 45, 25, 0.12);
+  --line-strong: rgba(60, 45, 25, 0.24);
+  --text-hi: #2b2317;
+  --text-mid: #5d5240;
+  --text-lo: #8a7d66;
+}
+[data-mode="light"] body {
+  background:
+    radial-gradient(120% 90% at 50% -10%, var(--ink-1) 0%, var(--ink-0) 58%),
+    var(--ink-0);
+}
+[data-mode="light"] .drawer-veil { background: rgba(40,30,15,.35); }
+
+/* ───────── prose inks (Disco-style readable registers) ───────── */
+.prose-stream .dlg {
+  color: var(--accent);
+  font-style: italic;
+}
+.prose-stream .name-ref {
+  color: var(--text-hi);
+  border-bottom: 1px dotted var(--accent-glow);
+  cursor: pointer;
+  font-variant-caps: small-caps;
+  letter-spacing: .02em;
+}
+
+/* DE-style tooltip card */
+.tip-veil { position: fixed; inset: 0; z-index: 60; }
+.tip-card {
+  position: fixed; z-index: 61;
+  width: min(300px, calc(100vw - 32px));
+  background: linear-gradient(180deg, var(--ink-2), var(--ink-1));
+  border: 1px solid var(--accent-glow);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.55);
+}
+.tip-kicker {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--accent);
+}
+
+/* Telltale-style toast */
+.toast-stack { position: fixed; top: calc(env(safe-area-inset-top) + 54px); left: 0; right: 0; z-index: 55; pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.toast {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .04em;
+  color: var(--text-hi);
+  background: color-mix(in srgb, var(--ink-1) 88%, transparent);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  border: 1px solid var(--accent-glow);
+  border-radius: 999px; padding: 7px 16px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.4);
+}
+
+/* segmented mode control */
+.seg { display: flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--ink-1); }
+.seg button {
+  flex: 1; padding: 7px 0;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--text-lo);
+}
+.seg button.on { background: var(--accent-soft); color: var(--accent); }
+
+/* shifts disclosure */
+.shift-line { display: flex; gap: 8px; align-items: baseline; font-family: var(--font-mono); font-size: 11px; line-height: 1.6; color: var(--text-mid); }
+.shift-line::before { content: "◆"; color: var(--accent); font-size: 8px; }
+
+details.shifts > summary { list-style: none; cursor: pointer; }
+details.shifts > summary::-webkit-details-marker { display: none; }
+
+.portrait {
+  width: 100%; aspect-ratio: 1; object-fit: cover;
+  border-radius: 12px; border: 1px solid var(--line-strong);
+}
+.scene-img { width: 100%; border-radius: 12px; border: 1px solid var(--line); margin: 8px 0 14px; }
+
+/* ───────── interludes: the world turned without you ───────── */
+.interlude { text-align: center; }
+.interlude-rule {
+  display: flex; align-items: center; gap: 12px;
+  margin: 10px 0;
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--accent);
+}
+.interlude-rule::before, .interlude-rule::after {
+  content: ""; flex: 1; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent-glow), transparent);
+}
+.interlude-prose {
+  font-style: italic;
+  font-size: 15.5px !important;
+  line-height: 1.7 !important;
+  color: var(--text-mid) !important;
+  text-align: left;
+  margin: 0 0 1em;
+}
