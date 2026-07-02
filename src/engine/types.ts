@@ -39,6 +39,8 @@ export interface Chapter {
   to_turn: number;
   title: string;
   summary: string;
+  on_contract?: boolean;      // did this chapter honor the standing direction (story contract)?
+  drift?: string;             // one-line description of the drift, when off contract
 }
 
 export interface WorldBible {
@@ -122,7 +124,8 @@ export interface Identity {
   name: string;
   age: number;
   pronouns?: string;          // "she/her", "he/him", "they/them" — pinned so the narrator never has to guess gender
-  appearance_facts: string;
+  appearance_facts: string;    // BEDROCK look — face, eyes, hair, build, skin. Set at creation, appended-to only by permanent bodily events, replaced only by the player. The engine must never overwrite this.
+  appearance_now?: string;     // CURRENT presentation — clothes, grime, visible state. Freely rewritten by the simulator each time it changes.
   background: string;         // BEDROCK: the original forge identity — who they fundamentally are. Never trimmed or rewritten by the engine.
   life_history?: string;      // ACCRETED: defining moments that have happened in play, folded in over time. Compressed when it grows long; bedrock is never touched.
   core_traits: string[];
@@ -379,6 +382,7 @@ export interface SaveState {
   records: { id: string; type: string; title: string; contents: string; location: string }[];
   chapters?: Chapter[];        // auto-generated story chapters (see Chapter)
   context_anchor?: { turn: number; digest: string; cast_sig: string }; // chatlog mode I-frame: the full state snapshot the conversation is anchored to
+  contract_drift?: string | null; // CONTRACT GOVERNOR: set when the chapter check finds the story drifting from the standing direction; injects a course-correction directive until the next check passes
   snapshots: { turn: number; blob: string; z?: boolean }[]; // rollback ring, max 7; z = gzip+base64 compressed
 }
 
@@ -400,7 +404,7 @@ export interface SimulatorDiff {
   traits: { char_id: string; label: string; origin: string; behavioral_impact: string; intensity: number }[];
   canon_add?: string[];        // world-altering public facts: new faiths, regime changes, public miracles, wars — broadcast to every mind
   track?: string[];            // promote these characters to the long game (they matter to a thread now)
-  appearance: { char_id: string; value: string }[];   // permanent bodily/appearance change — replaces appearance_facts
+  appearance: { char_id: string; value: string; permanent?: boolean }[]; // default: replaces appearance_now (presentation). permanent:true = ONE sentence APPENDED to the bedrock appearance_facts; bedrock is never replaced by the engine
   drives_update: { char_id: string; goal: string; progress?: number; blocker?: string; priority?: number }[]; // new or revised offscreen want
   threads_update: { id?: string; title: string; status: "active" | "resolved"; description?: string; tension?: number }[];
   character_exits?: { char_id: string; kind: "dead" | "departed"; note?: string }[]; // someone died or left the story for good

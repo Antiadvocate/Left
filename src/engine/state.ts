@@ -109,6 +109,8 @@ export function sanitize(state: SaveState): SaveState {
   for (const c of Object.values(state.condition ?? {})) (c as any).condition_age ??= {};
   state.telemetry ??= []; state.pressure_trace ??= []; state.snapshots ??= []; state.records ??= [];
   state.chapters ??= [];
+  for (const c of Object.values(state.characters)) c.appearance_now ??= "";
+  state.contract_drift ??= null;
   state.minds ??= {};
   for (const id of Object.keys(state.characters)) {
     state.condition[id] ??= blankCondition();

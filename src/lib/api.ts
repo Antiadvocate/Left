@@ -542,6 +542,9 @@ export const api = {
       difficulty_profile: g.world_bible.difficulty_profile ?? { lethality: "medium", friction_density: "balanced", antagonist_aggression: "slow_burn", protagonist_competence: "average" },
     };
     const s = newSave(g.world_bible.name || seed.slice(0, 40), bible);
+    // premise-as-constraint: the forge's canon lines land in world.canon, the strongest
+    // channel in the engine — rendered to BOTH models every turn, forever
+    s.world.canon = (Array.isArray(g.canon) ? g.canon : []).map(String).map((x: string) => x.trim()).filter(Boolean).slice(0, 6);
     registerCharacter(s, { ...g.player, character_id: "char_player" });
     s.memory["char_player"].core = [g.player.background].filter(Boolean);
 

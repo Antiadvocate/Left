@@ -26,7 +26,7 @@ export const SIMULATOR_JSON_SCHEMA: object = S({
   facts_learned: A(S({ char_id: str, fact: str, quote: str }, ["char_id", "fact"])),
   memory_recohere: A(S({ char_id: str, source_char: str, about: str, added_detail: str }, ["char_id", "about", "added_detail"])),
   traits: A(S({ char_id: str, label: str, origin: str, behavioral_impact: str, intensity: num }, ["char_id", "label"])),
-  appearance: A(S({ char_id: str, value: str }, ["char_id", "value"])),
+  appearance: A(S({ char_id: str, value: str, permanent: { type: "boolean" } }, ["char_id", "value"])),
   drives_update: A(S({ char_id: str, goal: str, progress: num, blocker: str, priority: num }, ["char_id", "goal"])),
   canon_add: strA,
   track: strA,

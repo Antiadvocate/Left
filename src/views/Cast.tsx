@@ -42,7 +42,7 @@ export default function Cast({ save, setSave, initialSel }: { save: ClientSave; 
     finally { setEmbodying(false); }
   };
   const [imgErr, setImgErr] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ name: "", age: "", background: "", life_history: "", appearance_facts: "", current_goal: "", core_traits: "" });
+  const [draft, setDraft] = useState({ name: "", age: "", background: "", life_history: "", appearance_facts: "", appearance_now: "", current_goal: "", core_traits: "" });
   const [newFact, setNewFact] = useState("");
   const [factsBusy, setFactsBusy] = useState(false);
   const [ivQ, setIvQ] = useState("");
@@ -70,7 +70,7 @@ export default function Cast({ save, setSave, initialSel }: { save: ClientSave; 
   const startEdit = () => {
     if (!c) return;
     setDraft({
-      name: c.name, age: String(c.age), background: c.background, life_history: c.life_history ?? "", appearance_facts: c.appearance_facts,
+      name: c.name, age: String(c.age), background: c.background, life_history: c.life_history ?? "", appearance_facts: c.appearance_facts, appearance_now: c.appearance_now ?? "",
       current_goal: c.current_goal ?? "", core_traits: c.core_traits.join(", "),
     });
     setEditing(true);
@@ -84,6 +84,7 @@ export default function Cast({ save, setSave, initialSel }: { save: ClientSave; 
         background: draft.background,
         life_history: draft.life_history,
         appearance_facts: draft.appearance_facts,
+        appearance_now: draft.appearance_now,
         current_goal: draft.current_goal,
         core_traits: draft.core_traits.split(",").map((x) => x.trim()).filter(Boolean),
       } },
@@ -292,7 +293,8 @@ export default function Cast({ save, setSave, initialSel }: { save: ClientSave; 
                   <Section title="Edit (the loom obeys)">
                     <EditField label="Name" v={draft.name} set={(v) => setDraft((d) => ({ ...d, name: v }))} />
                     <EditField label="Age" v={draft.age} set={(v) => setDraft((d) => ({ ...d, age: v }))} />
-                    <EditField label="Appearance" v={draft.appearance_facts} set={(v) => setDraft((d) => ({ ...d, appearance_facts: v }))} rows={2} />
+                    <EditField label="Appearance — baseline (face, eyes, hair, build; the engine can only append here, never rewrite)" v={draft.appearance_facts} set={(v) => setDraft((d) => ({ ...d, appearance_facts: v }))} rows={3} />
+                    <EditField label="Presenting now (clothes, grime, visible state — freely rewritten in play)" v={draft.appearance_now} set={(v) => setDraft((d) => ({ ...d, appearance_now: v }))} rows={2} />
                     <EditField label="Background — bedrock identity (never auto-trimmed)" v={draft.background} set={(v) => setDraft((d) => ({ ...d, background: v }))} rows={3} />
                     <EditField label="Story so far — what\u2019s happened in play (auto-grows & compresses)" v={draft.life_history} set={(v) => setDraft((d) => ({ ...d, life_history: v }))} rows={3} />
                     <EditField label="Current goal" v={draft.current_goal} set={(v) => setDraft((d) => ({ ...d, current_goal: v }))} />
@@ -320,6 +322,7 @@ export default function Cast({ save, setSave, initialSel }: { save: ClientSave; 
                   {(c.texture ?? []).length > 0 && <Row k="texture" v={(c.texture ?? []).join(" · ")} />}
                   {c.drive && <Row k="wants" v={`${c.drive.goal} — ${c.drive.progress}%${c.drive.blocker ? ` (blocked: ${nice(c.drive.blocker)})` : ""}`} />}
                   {(c.drive_queue ?? []).length > 0 && <Row k="then" v={(c.drive_queue ?? []).map((d) => d.goal).join(" · ")} />}
+                  {c.appearance_now?.trim() && <Row k="presenting" v={c.appearance_now} />}
                   <Row k="where" v={save.world.places[c.location ?? ""]?.name ?? (c.location ? c.location : "—")} />
                   {sel !== "char_player" && <Row k="status" v={c.tracked ? "followed — lives on in the world, always wanting something" : "not followed — fades into the background when offscreen"} />}
                 </Section>

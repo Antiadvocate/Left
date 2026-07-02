@@ -13,6 +13,10 @@
  */
 import type { SaveState, SimulatorDiff } from "./types";
 
+/** Names come from the simulator and can contain anything — "(unnamed taller woman)" is real
+ *  save data. Everything interpolated into a RegExp gets escaped, no exceptions. */
+const escRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 export interface HeuristicDiff {
   elapsed_minutes?: number;
   player_location?: string;
@@ -51,7 +55,7 @@ export function extractHeuristics(state: SaveState, action: string, prose: strin
   for (const [re, mins] of TIME_CUES) if (re.test(text)) out.elapsed_minutes = Math.max(out.elapsed_minutes ?? 0, mins);
 
   // ── player movement: strictly second-person arrival phrasing with a capitalized destination
-  const mv = /\b[Yy]ou (?:walk|head|step|go|climb|descend|make your way|push|slip|arrive)\s+(?:back\s+)?(?:in|out|up|down)?\s*(?:in)?to\s+(?:the\s+)?([A-Z][\w'’-]+(?:\s+[A-Z]?[\w'’-]+){0,3}?)(?=[,.;:!?\s])/;
+  const mv = /\b[Yy]ou (?:walk|head|step|go|climb|descend|make your way|push|slip|arrive)\s+(?:back\s+)?(?:in|out|up|down)?\s*(?:in)?to\s+(?:the\s+)?([A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+){0,3})(?=[,.;:!?\s])/;
   const mvm = mv.exec(text);
   if (mvm) out.player_location = mvm[1].trim();
 
@@ -71,7 +75,7 @@ export function extractHeuristics(state: SaveState, action: string, prose: strin
     }
   }
   for (const [lower, id] of names) {
-    const re = new RegExp(`\\b${lower}\\b[^.!?]{0,40}\\bcatches (his|her|their) breath\\b`, "i");
+    const re = new RegExp(`\\b${escRe(lower)}\\b[^.!?]{0,40}\\bcatches (his|her|their) breath\\b`, "i");
     if (re.test(text)) {
       const c = state.condition[id];
       if (c?.conditions.some((x) => /winded|breathless|out of breath/i.test(x))) out.facts!.push({ char_id: id, field: "condition_remove", value: "winded" });
@@ -80,7 +84,7 @@ export function extractHeuristics(state: SaveState, action: string, prose: strin
 
   // ── named-character arrival/departure: "Mara enters/arrives", "Mara leaves/storms out"
   for (const [lower, id] of names) {
-    if (new RegExp(`\\b${lower}\\b[^.!?]{0,24}\\b(leaves|walks out|storms out|departs|slips away|heads out)\\b`, "i").test(text)) {
+    if (new RegExp(`\\b${escRe(lower)}\\b[^.!?]{0,24}\\b(leaves|walks out|storms out|departs|slips away|heads out)\\b`, "i").test(text)) {
       out.locations.push({ char_id: id, place: "elsewhere nearby" });
     }
   }
@@ -88,7 +92,7 @@ export function extractHeuristics(state: SaveState, action: string, prose: strin
     if (cid === "char_player" || state.world.present.includes(cid) || c.status === "dead" || c.status === "departed") continue;
     const first = c.name.split(/\s+/)[0];
     if (!first || first.length < 3) continue;
-    if (new RegExp(`\\b${first}\\b[^.!?]{0,24}\\b(enters|arrives|walks in|steps in(?:to)?|appears at the door|joins you)\\b`, "i").test(text)) {
+    if (new RegExp(`\\b${escRe(first)}\\b[^.!?]{0,24}\\b(enters|arrives|walks in|steps in(?:to)?|appears at the door|joins you)\\b`, "i").test(text)) {
       out.locations.push({ char_id: cid, place: state.world.places[state.world.player_location]?.name ?? "here" });
     }
   }

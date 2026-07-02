@@ -262,7 +262,14 @@ export async function runTurn(state: SaveState, action: string, ev: TurnEvents, 
   const earnedResponse = (tier === "mythic" || tier === "cosmic")
     ? `\nAPPLY POLICY EARNED_RESPONSE — the player operates at extraordinary scale; the world responds at that scale.`
     : "";
-  const fullDirective = directive + forbid + forbiddenGate + earnedResponse + stallDirective + "\n" + undertow.directive;
+  // CONTRACT GOVERNOR: when the last chapter audit found the story drifting from its standing
+  // direction, every turn carries a course-correction until the next audit passes. This is the
+  // machinery that was missing when a "romantic/erotic literary fiction" ran 163 turns of
+  // tribunal procedure with nobody noticing.
+  const contractFix = state.contract_drift
+    ? `\nCOURSE-CORRECTION (the story has drifted from its contract): ${state.contract_drift} Steer back through present characters' wants and the standing direction — not with a lurch, but starting THIS turn.`
+    : "";
+  const fullDirective = directive + forbid + forbiddenGate + earnedResponse + stallDirective + contractFix + "\n" + undertow.directive;
   const groundNote = opts?.ground ? `\n\n=== GROUNDING (this turn) ===\nThis story is set in a real place / based on real subject matter. Use web search to get the real-world facts right — actual locations, layouts, names, how things really work, accurate period or setting detail — and weave that accuracy naturally into the prose. Do not cite sources or break the fiction; just be correct.` : "";
   // ── CONTEXT MODE ──────────────────────────────────────────────────────────
   // "digest" (classic): system + stable prefix + full digest rebuilt each turn. Correct, but only
@@ -352,7 +359,8 @@ export async function runTurn(state: SaveState, action: string, ev: TurnEvents, 
   // (movement, hand-offs, conditions subsiding, elapsed-time cues). The LLM diff always wins;
   // heuristics only fill what it missed — and when the diff failed entirely, they turn a
   // silent-amnesia turn into a "basics still recorded" turn. Zero tokens.
-  diff = backfillDiff(diff, extractHeuristics(state, action, prose));
+  try { diff = backfillDiff(diff, extractHeuristics(state, action, prose)); }
+  catch (e: any) { console.warn(`[turn] heuristic extraction failed (skipped): ${e.message}`); }
 
   // 4 ── apply diff + deterministic systems
   ev.onPhase("apply");
@@ -534,13 +542,18 @@ export async function runTurn(state: SaveState, action: string, ev: TurnEvents, 
       const fromTurn = (state.chapters.at(-1)?.to_turn ?? 0) + 1;
       const beats = state.history.filter((h) => h.kind !== "opening" && h.turn >= fromTurn).map((h) => `T${h.turn}: ${h.summary}`).join("\n");
       if (beats.trim()) {
+        const contract = state.world_bible.narrator_direction?.trim() || "";
         const res = await complete([
           { role: "system", content: CHAPTER_SYSTEM },
-          { role: "user", content: `Chapter ${state.chapters.length + 1}. Beats:\n${beats.slice(0, 6000)}` },
-        ], state.model_settings.simulator_model, state.model_settings.fallback_model, true, 400);
+          { role: "user", content: `STANDING DIRECTION (the contract): "${contract || "none given"}"\n\nChapter ${state.chapters.length + 1}. Beats:\n${beats.slice(0, 6000)}` },
+        ], state.model_settings.simulator_model, state.model_settings.fallback_model, true, 500);
         reflectionTokens += res.usage.prompt_tokens + res.usage.completion_tokens;
-        const ch = safeJson<{ title?: string; summary?: string }>(res.text, {});
-        if (ch.summary) state.chapters.push({ idx: state.chapters.length + 1, from_turn: fromTurn, to_turn: turn, title: (ch.title ?? `Chapter ${state.chapters.length + 1}`).slice(0, 60), summary: ch.summary.slice(0, 400) });
+        const ch = safeJson<{ title?: string; summary?: string; on_contract?: boolean; drift?: string }>(res.text, {});
+        if (ch.summary) {
+          state.chapters.push({ idx: state.chapters.length + 1, from_turn: fromTurn, to_turn: turn, title: (ch.title ?? `Chapter ${state.chapters.length + 1}`).slice(0, 60), summary: ch.summary.slice(0, 400), on_contract: ch.on_contract !== false, drift: ch.drift?.slice(0, 200) });
+          // arm or clear the governor
+          state.contract_drift = ch.on_contract === false && ch.drift?.trim() ? ch.drift.trim().slice(0, 200) : null;
+        }
       }
     } catch (e: any) { console.warn(`[turn] chaptering failed: ${e.message}`); }
   }
@@ -1036,10 +1049,23 @@ export function applyDiff(state: SaveState, diff: SimulatorDiff, action: string,
 
   for (const a of diff.appearance ?? []) {
     const id = resolveId(state, a.char_id); if (!id || !a.value) continue;
-    const cleaned = stripTransient(a.value);
-    if (!cleaned) continue; // a purely transient "update" is not an identity change
-    state.characters[id].appearance_facts = cleaned;
-    shifts.push(`${nameOf(id)} is changed — the world will describe them as they are now.`);
+    const c = state.characters[id];
+    if (a.permanent) {
+      // BEDROCK is append-only. A scar, a lost finger, a brand — one sentence joins the
+      // baseline; face, eyes, hair, build stay exactly as written at creation. The old code
+      // replaced appearance_facts wholesale here, and every partial "revision" from the
+      // bookkeeper erased the character's actual face. Never again.
+      const cleaned = stripTransient(a.value);
+      if (!cleaned) continue;
+      const sentence = cleaned.replace(/\s+/g, " ").trim().replace(/[.\s]+$/, "") + ".";
+      if (!c.appearance_facts.toLowerCase().includes(sentence.toLowerCase().slice(0, -1))) {
+        c.appearance_facts = `${c.appearance_facts.replace(/[.\s]+$/, "")}. ${sentence}`.slice(0, 700);
+        shifts.push(`${nameOf(id)} is permanently marked — ${cleaned}`);
+      }
+    } else {
+      // presentation layer: freely replaced, never touches the baseline
+      c.appearance_now = a.value.replace(/\s+/g, " ").trim().slice(0, 300);
+    }
   }
 
   // group drives_update by character; highest priority becomes active, rest become the queue (max 2)
