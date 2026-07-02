@@ -7,6 +7,21 @@ const OR_URL = "https://openrouter.ai/api/v1/chat/completions";
 export interface Usage { prompt_tokens: number; completion_tokens: number; cached_tokens?: number; cost?: number }
 export interface LLMResult { text: string; usage: Usage; model: string }
 
+/** Per-save LLM preferences, set by the turn loop each call batch (module-level because the
+ *  llm layer deliberately knows nothing about SaveState). */
+export interface LLMPrefs { routeByPrice?: boolean }
+let prefs: LLMPrefs = {};
+export function setLLMPrefs(p: LLMPrefs): void { prefs = { ...p }; }
+
+/** Ring buffer of recent LLM failures — the old `complete()` swallowed the primary error
+ *  entirely, so a misbehaving narrator model looked identical to a healthy fallback. */
+export const llmErrors: { at: number; model: string; message: string }[] = [];
+function logErr(model: string, e: any): void {
+  llmErrors.push({ at: Date.now(), model, message: String(e?.message ?? e).slice(0, 300) });
+  if (llmErrors.length > 20) llmErrors.shift();
+  console.warn(`[llm] ${model} failed:`, e?.message ?? e);
+}
+
 function key(): string {
   const k = getApiKey();
   if (!k) throw new Error("No OpenRouter key set — open Tuning (or the welcome screen) and paste your key.");
@@ -36,14 +51,50 @@ export function buildMessages(system: string, stable: string, volatile: string, 
   ];
 }
 
-async function once(messages: any[], model: string, json: boolean, maxTokens: number): Promise<LLMResult> {
+export type JsonMode = boolean | { schema: object; name?: string };
+
+
+/** CHATLOG-MODE message builder. The full state snapshot (I-frame) rides inside the system
+ *  message; the turns since the anchor are literal user/assistant pairs; the current turn's
+ *  user message carries the small P-frame delta + direction + action. Between anchors every
+ *  prior byte is identical, so implicit prefix caching covers nearly the whole input. For
+ *  Anthropic models, cache_control breakpoints are set on the system block and the last
+ *  history pair. */
+export function buildChatlogMessages(system: string, anchorDigest: string, pairs: { user: string; assistant: string }[], currentUser: string, model: string): any[] {
+  const sys = `${system}\n\n=== WORLD STATE (anchored snapshot; per-turn deltas follow in the conversation) ===\n${anchorDigest}`;
+  const anthropic = model.startsWith("anthropic/");
+  const msgs: any[] = [];
+  if (anthropic) msgs.push({ role: "system", content: [{ type: "text", text: sys, cache_control: { type: "ephemeral" } }] });
+  else msgs.push({ role: "system", content: sys });
+  pairs.forEach((p, i) => {
+    const lastPair = i === pairs.length - 1;
+    msgs.push({ role: "user", content: p.user || "(continue)" });
+    if (anthropic && lastPair) msgs.push({ role: "assistant", content: [{ type: "text", text: p.assistant || "…", cache_control: { type: "ephemeral" } }] });
+    else msgs.push({ role: "assistant", content: p.assistant || "…" });
+  });
+  msgs.push({ role: "user", content: currentUser });
+  return msgs;
+}
+
+async function once(messages: any[], model: string, json: JsonMode, maxTokens: number): Promise<LLMResult> {
+  // CONSTRAINED DECODING: when a schema is supplied, ask the provider to enforce it at the
+  // decoder (structured outputs). This kills malformed JSON at the source instead of repairing
+  // it after. Providers that don't support json_schema reject the request; `complete` catches
+  // that and retries in plain json_object mode.
+  const rf = json
+    ? (typeof json === "object"
+        ? { response_format: { type: "json_schema", json_schema: { name: json.name ?? "diff", strict: false, schema: json.schema } } }
+        : { response_format: { type: "json_object" } })
+    : {};
   const res = await fetch(OR_URL, {
     method: "POST",
     headers: headers(),
     body: JSON.stringify({
       model, messages, max_tokens: maxTokens,
-      temperature: json ? 0.3 : 0.85,
-      ...(json ? { response_format: { type: "json_object" } } : {}),
+      temperature: json ? 0.2 : 0.85,
+      ...rf,
+      // PRICE ROUTING: let OpenRouter pick the cheapest healthy provider for this model.
+      ...(prefs.routeByPrice ? { provider: { sort: "price" } } : {}),
       usage: { include: true },
     }),
   });
@@ -58,9 +109,17 @@ async function once(messages: any[], model: string, json: boolean, maxTokens: nu
   };
 }
 
-export async function complete(messages: any[], model: string, fallback: string, json = false, maxTokens = 4000): Promise<LLMResult> {
+export async function complete(messages: any[], model: string, fallback: string, json: JsonMode = false, maxTokens = 4000): Promise<LLMResult> {
   try { return await once(messages, model, json, maxTokens); }
-  catch { return await once(messages, fallback, json, maxTokens); }
+  catch (e1: any) {
+    logErr(model, e1);
+    // a schema rejection is a capability gap, not a model failure — retry SAME model, plain JSON
+    if (typeof json === "object" && /response_format|json_schema|400/.test(String(e1?.message ?? ""))) {
+      try { return await once(messages, model, true, maxTokens); } catch (e2: any) { logErr(model, e2); }
+    }
+    try { return await once(messages, fallback, typeof json === "object" ? true : json, maxTokens); }
+    catch (e3: any) { logErr(fallback, e3); throw e3; }
+  }
 }
 
 export async function* completeStream(messages: any[], model: string, fallback: string, maxTokens = 4000, online = false): AsyncGenerator<string, LLMResult, unknown> {

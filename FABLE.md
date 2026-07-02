@@ -48,47 +48,55 @@ The root cause was architectural: *every* durable fact passed through a small mo
 ### What was deliberately NOT touched
 Relaxation kernel, perception gate, salience scoring (α·recency + β·importance + γ·relevance + state bias), decay stages, mood-congruent retrieval and tinting, integration gate, edges/rumors/drives/clocks/pressure/focus/mind layer, god mode, channels, presence-by-colocation, UI. Feature parity is exact; old saves load (sanitize backfills the fact ledger).
 
-## 3. Remaining known issues (found in audit, not yet fixed)
+## 3. Known issues — all fixed in round 2
 
-- **Retrieval rich-get-richer**: retrieval refreshes `last_accessed_turn`, which boosts recency, which re-retrieves the same memories. Consider refreshing at half-weight or capping refreshes per memory per N turns.
-- **Place proliferation**: `resolvePlace` creates a record for every unmatched name and nothing ever GC's them. Add a sweep: unvisited, empty, non-referenced places older than ~40 turns.
-- **`localeOf` collisions**: "Harbor House" and "Harbor" share no locale logic but "House - kitchen"/"House" do; two unrelated places starting with the same word before a dash could merge scenes.
-- **`complete()` swallows the primary error** — the fallback fires with no record of why. Log the first error into telemetry.
-- **`involvement()`** rescans history per character per assemble level — harmless now, quadratic-ish if the cast grows.
-- **Edges are single-direction on write** — the simulator emits A→B; B→A often should move (asymmetrically). Consider a small reciprocal heuristic.
-- **Snapshot ring** keeps 7 full-state JSON blobs per save; fine now, but the fact ledger and life histories will grow them — consider structural sharing or compression.
+| Issue | Fix |
+|---|---|
+| Retrieval rich-get-richer (retrieved memories fully refreshed recency, locking in the same top-k) | Full refresh only when scene relevance ≥ 0.2 (genuine rehearsal); otherwise half-step toward current turn, so pure recency/importance surfacing still ages |
+| Place proliferation (`resolvePlace` created a record for every unmatched name, forever) | `gcPlaces`: over a soft cap of 60, evict places that are unoccupied, nobody's location, and unreferenced in the last 8 turns — oldest first (creation time parsed from the uid) |
+| `localeOf` collisions ("Harbor" vs "Harbor House" could merge into one scene) | Locale-based presence match now requires an explicit sub-room dash ("House - kitchen") on at least one of the two names |
+| `complete()` swallowed the primary model's error | Errors logged to an exported `llmErrors` ring (last 20) with console warnings; final failure now throws instead of vanishing |
+| `involvement()` rescanned full history per character | Last-prose text hoisted out of the loop — computed once per digest |
+| Edges only moved in the written direction | Reciprocal echo: a meaningful shift (|Δ| ≥ 4) echoes back at 0.3 warmth / 0.25 trust / −0.5 power — unless the diff moved the reverse explicitly, and never into the player's own head |
+| Snapshot ring stored 7 full plain-JSON state copies | gzip via `CompressionStream` (base64-stored, `z` flag), transparent fallback to plain where unsupported; `pushSnapshot`/`rollback` now async |
 
-## 4. If you want to go further than half (research-grade options)
+## 4. Research directions — all five implemented
 
-1. **Chat-log-as-cache (the SillyTavern economics).** ST is cheap not because it's smarter but because its context is an *append-only conversation*: the entire history is a byte-identical prefix, so providers cache nearly 100% of input at 0.1–0.25×. Weft rebuilds a bespoke digest each turn — correct for "state is law," hostile to caching. Hybrid: keep the digest, but restructure the narrator call as multi-turn messages where prior turns are literal assistant messages and only a small per-turn state-delta note rides in the newest user message, with a full digest re-anchored every K turns (video-codec style: I-frames + P-frames). Estimated effective input: ~1.5–2.5k/turn. This is the single biggest remaining lever; it's also the most invasive, which is why it's a proposal, not a patch.
-2. **Regex-first bookkeeping, LLM-second.** Locations, inventory hand-offs, condition removes, and elapsed time are highly patterned; a deterministic extractor could handle 60–70% of diff keys, with the LLM called only for edges/psyche/memories. Halves the simulator again.
-3. **Constrained decoding** (OpenRouter `response_format` json_schema on providers that honor it) — kills malformed JSON at the source rather than repairing after.
-4. **Off-peak / batch pricing** — DeepSeek's off-peak window discounts are substantial if any of your play is time-flexible; not a design change at all.
-5. **MemGPT-style paging** if casts grow past ~12 central: page whole characters out to a one-line stub + on-demand rehydration, rather than shrinking everyone uniformly.
+**1. Chat-log-as-cache** (`context_mode: "chatlog"`, off by default — Tuning → Context engine).
+The conversation becomes the context: a full state snapshot (I-frame) is anchored inside the system message every `iframe_cadence` turns (default 6), stored byte-identical in `save.context_anchor`; each turn appends only literal [action]/[prose] pairs plus a small P-frame delta (`deltaNote`: NOW line, per-present compact state, top-2 recalls, last-turn shifts). Between anchors every prior byte is identical, so implicit prefix caching (DeepSeek ~0.1×, Gemini ~0.25×) covers nearly the whole input; Anthropic models get `cache_control` breakpoints on the system block and last pair. Re-anchor also triggers on cast changes. Trade-off is state-fidelity drift between anchors — that's why it's opt-in and the cadence is tunable. The simulator stays on its minimal digest regardless.
 
-## 5. UX notes (recommendation, not code)
+**2. Regex-first bookkeeping** (`engine/extract.ts`, always on, zero tokens).
+Deterministic extraction of the mechanical diff keys: elapsed-time cues, second-person movement, inventory hand-offs, conditions subsiding, named arrivals/departures. Runs as *backfill*: the LLM diff wins on any key it populated; heuristics only fill gaps — and when the diff fails entirely, they turn a silent-amnesia turn into a basics-still-recorded turn. Every pattern is second-person or names a known character; ambiguity is left to the LLM. Unit-tested.
 
-The unwieldiness has one root: **Weft exposes the simulation as the interface.** Cast, Chronicle, Settings, World are debug views wearing product clothes. Suggested shape:
-- **One play surface, three drawers.** Play stays primary; collapse Cast/World/Chronicle into slide-over drawers from the play screen (the "who's here" strip is already the right instinct — extend it: tap a face → that character's drawer, with memory/facts/bonds tabs).
-- **A "Truth" panel** — the fact ledger made visible and *editable*. When the engine gets something wrong, you correct it in one field and it propagates (this turns the fidelity layer into a user feature, and it's the cheapest trust-builder the app can have).
-- **Cost as a first-class HUD element** — you already track per-turn tokens; surface a small $/session estimate + cache-hit % next to the composer, with one-tap Lean toggle. Budget anxiety is a UX problem before it's an engineering one.
-- **Settings triage**: split "Story" (tension, focus, direction) from "Machine" (models, budgets, k, cadence). Most sessions never need the second page.
+**3. Constrained decoding** (`engine/schema.ts`).
+The simulator call now ships a permissive JSON Schema (`response_format: json_schema`) so supporting providers enforce the diff shape at the decoder. Schema rejection is treated as a capability gap: same model retried in plain `json_object`, then the normal fallback chain.
 
-## 6. Feature proposals for the refresh (3–4, in priority order)
+**4. Price-aware routing** (Tuning → Context engine → "Route by price").
+Adds OpenRouter `provider: { sort: "price" }` per call so each request lands on the cheapest healthy provider. The settings card also notes DeepSeek's automatic off-peak discount window (≈16:30–00:30 UTC).
 
-1. **Anchor Facts / Truth panel** (above) — player-editable verified-facts board per character. Backend already exists as of this revision; it's a view + two api methods.
-2. **Chaptering** — auto-generate a one-paragraph chapter summary every ~25 turns (one cheap call), shown as a timeline in Chronicle and injected as a single line in context, letting you shrink `history_window` without losing arc awareness.
-3. **Interview mode** — talk to any character out-of-scene (no turn, no world mutation, cheap model, their digest only). Costs ~1k tokens a question, creates enormous attachment, and doubles as a memory-fidelity debugger: ask her where you're from.
-4. **Turn cost governor** — a per-day budget in settings; when projected spend crosses it, the engine auto-steps: lean mode on → token_budget tightens → suggests interlude/chapter. Makes "$5/day" a setting instead of a hope.
+**5. MemGPT-style paging** (`paging`, on by default; Tuning → Context engine).
+A central character offscreen ≥ 12 turns, unnamed in recent prose/action, with weak player bond (<40 combined |warmth|+|trust|) pages out: their identity card leaves the cached prefix, replaced by a one-line dormant stub in the digest ("wake by naming them"). They rehydrate instantly on presence or mention. Memory, traits, and edges are untouched — only the card's seat in context is paged. Transitions are rare, so prefix cache stability holds between them.
 
-## 7. Files changed in this revision
+## 5. UX — implemented
 
-- `src/engine/facts.ts` — **new**: fact ledger, proper-noun verification, quote grounding, belief filter.
-- `src/engine/types.ts` — `DurableFact`, `CharMemory.facts`, `SimulatorDiff.facts_learned`, memory `anchor`.
-- `src/engine/memory.ts` — KNOWS digest line, proximity-aware commitment boost, reconsolidation guard, staggered `reflectionDue`.
-- `src/engine/prompts.ts` — system legend + policies (cached), simulator fidelity rules, `simulatorContext()`, optional-key schema with anchors, compact per-character keys, volatility-ordered digest.
-- `src/engine/turn.ts` — simulator on its own context, JSON rescue + visible thin-bookkeeping, memory/fact grounding in `applyDiff`, verified reflection, policy-activation directives.
-- `src/engine/state.ts` — fact-ledger init/backfill.
-- `src/lib/api.ts` — grounded context-refresh condensation.
+- **One play surface, three drawers.** Cast, World, and Chronicle now also mount as right-side slide-overs from chips on the Play strip — check something, keep playing, never leave the scene. Bottom tabs still work.
+- **Who's-here chips are tappable** — tap a face, their full Cast drawer opens on them.
+- **Cost HUD** above the composer: session spend (provider-reported), cache-hit %, daily-budget bar with eco state, and a one-tap lean toggle.
+- **Truth panel** in every character's Cast drawer: the verified-fact ledger, listed with sources, deletable, hand-addable. Player edits are law.
+- **Settings triage**: Tuning is now "The story" (tension, bible, opening, palette) above "The machine" (key, models, context engine, token economy, cost governor, cast, memory).
 
-`tsc --noEmit` clean; `vite build` clean; grounding layer unit-tested against the Seattle/Portland case.
+## 6. Features — implemented
+
+- **Chaptering** (`chapter_cadence`, default 25, 0 = off): one cheap call distills the last stretch of turn summaries into a titled chapter — timeline at the top of Chronicle, carried as one line each in context (STORY SO FAR block), so the verbatim history window can stay small without losing the arc.
+- **Interview mode** (Cast drawer): a quiet aside with any character, out of scene. They answer only from their own digest — memories, verified facts, mood through the openness rules — on the cheap model. Pure: nothing enters the story, their memory, or the world.
+- **Cost governor** (`daily_budget_usd`, 0 = off): soft ceiling. Past 70% of today's spend the engine shifts to eco — lean prompts + tightened context — transparently, without touching saved settings. Play is never blocked; the HUD shows the bar and the leaf.
+- **Anchor facts / Truth panel** — see UX above; `api.setFacts` is the authoritative write path.
+
+## 7. Files changed
+
+**New:** `engine/facts.ts` (fact ledger + grounding), `engine/extract.ts` (regex-first bookkeeping), `engine/schema.ts` (simulator JSON schema).
+**Engine:** `types.ts`, `memory.ts`, `prompts.ts`, `turn.ts`, `state.ts`, `continuity.ts`, `llm.ts`.
+**API:** `lib/api.ts` (governor, setFacts, interview, grounded refresh).
+**Views:** `Play.tsx` (HUD, drawers, presence deep-link), `Cast.tsx` (Truth panel, interview), `Chronicle.tsx` (chapters), `Settings.tsx` (triage + new controls).
+
+All type-checked (`tsc --noEmit` clean) and built (`vite build` clean). Unit tests: fact grounding (Portland→Seattle repair, clean-fact pass-through, belief filtering) and heuristic extraction (movement, hand-offs, condition removal, elapsed time, arrivals) both pass.

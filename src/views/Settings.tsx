@@ -36,6 +36,30 @@ function TextField({ label, value, onChange, mono, rows }: {
   );
 }
 
+
+function Toggle({ on, onFlip, title, desc }: { on: boolean; onFlip: () => void; title: string; desc: string }) {
+  return (
+    <button className="w-full flex items-center justify-between py-2" onClick={onFlip}>
+      <span className="text-left">
+        <span className="block text-[14px]">{title}</span>
+        <span className="block text-[11px]" style={{ color: "var(--text-lo)" }}>{desc}</span>
+      </span>
+      <span style={{ width: 42, height: 24, borderRadius: 999, background: on ? "var(--accent)" : "var(--ink-3)", position: "relative", flexShrink: 0, transition: "background .2s" }}>
+        <span style={{ position: "absolute", top: 2, left: on ? 20 : 2, width: 20, height: 20, borderRadius: 999, background: "var(--ink-0)", transition: "left .2s" }} />
+      </span>
+    </button>
+  );
+}
+
+function SectionHeader({ label, blurb }: { label: string; blurb: string }) {
+  return (
+    <div className="px-1 pt-2">
+      <div className="font-display text-[16px]">{label}</div>
+      <div className="text-[11px]" style={{ color: "var(--text-lo)" }}>{blurb}</div>
+    </div>
+  );
+}
+
 export default function Settings({ save, setSave }: { save: ClientSave; setSave: (s: ClientSave) => void }) {
   const m = save.model_settings;
   const wb = save.world_bible;
@@ -103,33 +127,7 @@ export default function Settings({ save, setSave }: { save: ClientSave; setSave:
 
   return (
     <div className="scroll-y h-full px-4 pb-10 pt-3 space-y-3">
-      <div className="card p-4">
-        <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>OpenRouter key (stored on this device only)</div>
-        <input className="field" style={{ fontFamily: "var(--font-mono)", fontSize: 13 }} type="password"
-          placeholder="sk-or-..." value={orKey} onChange={(e) => setOrKey(e.target.value)} />
-        <button className="btn w-full mt-2" onClick={() => { setApiKey(orKey); setKeySaved(true); setTimeout(() => setKeySaved(false), 1400); }}>
-          {keySaved ? <><Check size={14} /> saved locally</> : "Save key"}
-        </button>
-        <div className="text-[11px] italic mt-1.5" style={{ color: "var(--text-lo)" }}>
-          The key lives in your browser's localStorage and is sent straight to OpenRouter. It never touches any other server. Get one at openrouter.ai/keys.
-        </div>
-      </div>
-      <div className="card p-4">
-        <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>Models (OpenRouter ids)</div>
-        <ModelPicker label="Narrator — the voice" value={draft.narrator_model} onChange={setM("narrator_model")} />
-        <ModelPicker label="Simulator — the bookkeeper" value={draft.simulator_model} onChange={setM("simulator_model")} />
-        <ModelPicker label="Forge — world generation" value={draft.forge_model} onChange={setM("forge_model")} />
-        <ModelPicker label="Fallback" value={draft.fallback_model} onChange={setM("fallback_model")} />
-        <ModelPicker label="Images — portraits & scenes" value={draft.image_model} onChange={setM("image_model")} kind="image" />
-        <div className="text-[11px] -mt-1 mb-1" style={{ color: "var(--text-lo)" }}>
-          Live list from OpenRouter, newest first — search or type a custom id. Image field shows image-capable models.
-        </div>
-        <div className="text-[11px] italic mt-1" style={{ color: "var(--text-lo)" }}>
-          Two calls per turn. Prefix `anthropic/` models get prompt-cache breakpoints automatically.
-          Append ":online" to any model id (e.g. deepseek/deepseek-chat-v3-0324:online) and it gains live web search for grounding — works for the narrator, simulator, or forge.
-        </div>
-      </div>
-
+      <SectionHeader label="The story" blurb="How this world behaves — tension, direction, canon." />
       <div className="card p-4">
         <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>World tension</div>
         <div className="flex items-center justify-between mb-1">
@@ -153,75 +151,6 @@ export default function Settings({ save, setSave }: { save: ClientSave; setSave:
                     : "High — relentless. Expect frequent, fast escalation."}
         </div>
       </div>
-
-      <div className="card p-4">
-        <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>Token economy</div>
-        <button className="w-full flex items-center justify-between py-2" onClick={() => setDraft((d) => ({ ...d, lean_mode: !d.lean_mode }))}>
-          <span className="text-left">
-            <span className="block text-[14px]">Lean mode</span>
-            <span className="block text-[11px]" style={{ color: "var(--text-lo)" }}>Compressed instructions + only present/tracked cast in context. ~Half the input tokens, slightly less prose richness.</span>
-          </span>
-          <span style={{ width: 42, height: 24, borderRadius: 999, background: draft.lean_mode ? "var(--accent)" : "var(--ink-3)", position: "relative", flexShrink: 0, transition: "background .2s" }}>
-            <span style={{ position: "absolute", top: 2, left: draft.lean_mode ? 20 : 2, width: 20, height: 20, borderRadius: 999, background: "var(--ink-0)", transition: "left .2s" }} />
-          </span>
-        </button>
-        <div className="mt-2">
-          <TextField label="Token budget per turn (0 = off; e.g. 4000 to cap context)" value={String(draft.token_budget ?? 0)} onChange={(v) => setDraft((d) => ({ ...d, token_budget: Number(v) || 0 }))} mono />
-          <div className="text-[11px] -mt-0.5" style={{ color: "var(--text-lo)" }}>
-            When set, the per-turn context is trimmed toward this many input tokens — shedding offscreen detail, old memories, and rumors first, collapsing only the least-involved present characters as a last resort. People in your scene are never dropped.
-          </div>
-        </div>
-      </div>
-
-      <div className="card p-4">
-        <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>Cast</div>
-        <div className="flex items-center justify-between">
-          <span className="text-[14px]">Central characters</span>
-          <span className="font-mono text-[13px]" style={{ color: "var(--accent)" }}>{draft.max_central_characters ?? 6}</span>
-        </div>
-        <input type="range" min={2} max={12} step={1} value={draft.max_central_characters ?? 6}
-          onChange={(e) => setDraft((d) => ({ ...d, max_central_characters: Number(e.target.value) }))}
-          className="w-full mt-1" style={{ accentColor: "var(--accent)" }} />
-        <div className="text-[11px] mt-1" style={{ color: "var(--text-lo)" }}>
-          How many full, autonomous characters the world holds at once — each with memory, goals, and inner life. Beyond this, new people enter as lightweight background figures (a guard, a vendor) that cost almost nothing and stay simple, until a central slot frees up. Fewer central characters means each gets more presence and autonomy; more means a busier, costlier cast. Default 6.
-        </div>
-      </div>
-
-      <div className="card p-4">
-        <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>Memory economy</div>
-        <TextField label="Memories per NPC in context (top-k)" value={String(draft.context_memories_k)} onChange={setM("context_memories_k")} mono />
-        <TextField label="Reflection cadence (turns)" value={String(draft.reflection_cadence)} onChange={setM("reflection_cadence")} mono />
-        <TextField label="Verbatim history window (turns)" value={String(draft.history_window)} onChange={setM("history_window")} mono />
-      </div>
-
-      <div className="card p-4">
-        <div className="font-mono text-[10px] uppercase tracking-widest mb-2.5" style={{ color: "var(--text-lo)" }}>Palette (previews live — save to keep)</div>
-        <div className="flex flex-wrap gap-2">
-          {THEMES.map((t) => (
-            <button key={t} className="chip" onClick={() => previewTheme(t)}
-              style={theme === t ? { color: "var(--accent)", borderColor: "var(--accent-glow)", background: "var(--accent-soft)" } : undefined}>
-              {t}
-            </button>
-          ))}
-        </div>
-
-        <div className="font-mono text-[10px] uppercase tracking-widest mt-4 mb-2.5" style={{ color: "var(--text-lo)" }}>Narrator's typeface</div>
-        <div className="flex flex-wrap gap-2">
-          {PROSE_FONTS.map((f) => (
-            <button key={f.id} className="chip" style={{
-              textTransform: "none", fontFamily: f.stack, fontSize: 12, letterSpacing: 0,
-              ...(proseFont === f.id ? { color: "var(--accent)", borderColor: "var(--accent-glow)", background: "var(--accent-soft)" } : {}),
-            }}
-              onClick={() => { setProseFont(f.id); applyProseFont(f.id); }}>
-              {f.label}
-            </button>
-          ))}
-        </div>
-        <div className="mt-3 text-[15px]" style={{ fontFamily: "var(--font-prose)", color: "var(--text-mid)" }}>
-          The ice spoke first, a long groan from under the reeds. <span className="dlg">"Don't,"</span> Ettel said, without turning.
-        </div>
-      </div>
-
       <div className="card p-4">
         <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>World bible — every rule, yours (live next turn)</div>
 
@@ -274,28 +203,6 @@ export default function Settings({ save, setSave }: { save: ClientSave; setSave:
           Edit the world directly — bible, threads, faction clocks, places, edges, canon. Handy at turn 1 to fix anything the forge over-baked.
         </div>
       </div>
-
-      {worldJson !== null && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 95, background: "var(--ink-0)", display: "flex", flexDirection: "column", paddingTop: "env(safe-area-inset-top)" }}>
-          <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--line)" }}>
-            <div className="font-display text-[16px]">Raw world edit</div>
-            <div className="text-[12px] mt-1" style={{ color: "var(--text-mid)" }}>
-              World bible, threads, clocks, places, edges, canon. Delete a clock you don't want, retune the bible, fix the opening. Save writes it straight to the world.
-            </div>
-            {worldErr && <div className="text-[12px] mt-1.5 px-2 py-1 rounded" style={{ color: "var(--danger)", background: "rgba(200,60,60,.12)" }}>{worldErr}</div>}
-            <div className="flex gap-2 mt-2.5">
-              <button className="btn btn-accent" style={{ flex: 1 }} onClick={async () => {
-                try { const parsed = JSON.parse(worldJson); setSave(await api.rawEditWorld(save.id, parsed)); setWorldJson(null); setWorldErr(""); }
-                catch (e) { const m = e instanceof Error ? e.message : String(e); setWorldErr(m.includes("JSON") ? "Invalid JSON — check brackets and commas." : m); }
-              }}>Save world</button>
-              <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setWorldJson(null); setWorldErr(""); }}>Cancel</button>
-            </div>
-          </div>
-          <textarea value={worldJson} onChange={(e) => setWorldJson(e.target.value)} spellCheck={false} autoCapitalize="off" autoCorrect="off"
-            style={{ flex: 1, width: "100%", background: "var(--ink-1)", color: "var(--text-mid)", border: "none", padding: "12px 14px", fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.5 }} />
-        </div>
-      )}
-
       <div className="card p-4">
         <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>Opening scene</div>
         <div className="text-[12px] mb-2" style={{ color: "var(--text-mid)" }}>The scene you start in, before turn 1. Generate one, edit it, or clear it.</div>
@@ -322,6 +229,151 @@ export default function Settings({ save, setSave }: { save: ClientSave; setSave:
           </div>
         )}
       </div>
+      <div className="card p-4">
+        <div className="font-mono text-[10px] uppercase tracking-widest mb-2.5" style={{ color: "var(--text-lo)" }}>Palette (previews live — save to keep)</div>
+        <div className="flex flex-wrap gap-2">
+          {THEMES.map((t) => (
+            <button key={t} className="chip" onClick={() => previewTheme(t)}
+              style={theme === t ? { color: "var(--accent)", borderColor: "var(--accent-glow)", background: "var(--accent-soft)" } : undefined}>
+              {t}
+            </button>
+          ))}
+        </div>
+
+        <div className="font-mono text-[10px] uppercase tracking-widest mt-4 mb-2.5" style={{ color: "var(--text-lo)" }}>Narrator's typeface</div>
+        <div className="flex flex-wrap gap-2">
+          {PROSE_FONTS.map((f) => (
+            <button key={f.id} className="chip" style={{
+              textTransform: "none", fontFamily: f.stack, fontSize: 12, letterSpacing: 0,
+              ...(proseFont === f.id ? { color: "var(--accent)", borderColor: "var(--accent-glow)", background: "var(--accent-soft)" } : {}),
+            }}
+              onClick={() => { setProseFont(f.id); applyProseFont(f.id); }}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 text-[15px]" style={{ fontFamily: "var(--font-prose)", color: "var(--text-mid)" }}>
+          The ice spoke first, a long groan from under the reeds. <span className="dlg">"Don't,"</span> Ettel said, without turning.
+        </div>
+      </div>
+      <SectionHeader label="The machine" blurb="Keys, models, and token economics. Set once, forget mostly." />
+      <div className="card p-4">
+        <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>OpenRouter key (stored on this device only)</div>
+        <input className="field" style={{ fontFamily: "var(--font-mono)", fontSize: 13 }} type="password"
+          placeholder="sk-or-..." value={orKey} onChange={(e) => setOrKey(e.target.value)} />
+        <button className="btn w-full mt-2" onClick={() => { setApiKey(orKey); setKeySaved(true); setTimeout(() => setKeySaved(false), 1400); }}>
+          {keySaved ? <><Check size={14} /> saved locally</> : "Save key"}
+        </button>
+        <div className="text-[11px] italic mt-1.5" style={{ color: "var(--text-lo)" }}>
+          The key lives in your browser's localStorage and is sent straight to OpenRouter. It never touches any other server. Get one at openrouter.ai/keys.
+        </div>
+      </div>
+      <div className="card p-4">
+        <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>Models (OpenRouter ids)</div>
+        <ModelPicker label="Narrator — the voice" value={draft.narrator_model} onChange={setM("narrator_model")} />
+        <ModelPicker label="Simulator — the bookkeeper" value={draft.simulator_model} onChange={setM("simulator_model")} />
+        <ModelPicker label="Forge — world generation" value={draft.forge_model} onChange={setM("forge_model")} />
+        <ModelPicker label="Fallback" value={draft.fallback_model} onChange={setM("fallback_model")} />
+        <ModelPicker label="Images — portraits & scenes" value={draft.image_model} onChange={setM("image_model")} kind="image" />
+        <div className="text-[11px] -mt-1 mb-1" style={{ color: "var(--text-lo)" }}>
+          Live list from OpenRouter, newest first — search or type a custom id. Image field shows image-capable models.
+        </div>
+        <div className="text-[11px] italic mt-1" style={{ color: "var(--text-lo)" }}>
+          Two calls per turn. Prefix `anthropic/` models get prompt-cache breakpoints automatically.
+          Append ":online" to any model id (e.g. deepseek/deepseek-chat-v3-0324:online) and it gains live web search for grounding — works for the narrator, simulator, or forge.
+        </div>
+      </div>
+      <div className="card p-4">
+        <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>Context engine</div>
+        <Toggle on={draft.context_mode === "chatlog"} onFlip={() => setDraft((d) => ({ ...d, context_mode: d.context_mode === "chatlog" ? "digest" : "chatlog" }))}
+          title="Chat-log context (cache-first)"
+          desc="The conversation becomes the context: a full state snapshot is anchored every few turns and each turn only appends. Providers with prefix caching (DeepSeek ~0.1x, Gemini ~0.25x) then bill nearly all input at the cached rate. Off = classic per-turn digest (maximum state fidelity)." />
+        {draft.context_mode === "chatlog" && (
+          <TextField label="Re-anchor cadence (turns between full state snapshots)" value={String(draft.iframe_cadence ?? 6)} onChange={(v) => setDraft((d) => ({ ...d, iframe_cadence: Math.max(2, Number(v) || 6) }))} mono />
+        )}
+        <Toggle on={draft.paging !== false} onFlip={() => setDraft((d) => ({ ...d, paging: d.paging === false ? true : false }))}
+          title="Page out cold characters"
+          desc="A central character who's been offscreen a while and isn't bonded to you drops to a one-line stub in context, and wakes the moment they appear or you name them. Their memory is untouched — only their card leaves the room." />
+        <Toggle on={!!draft.route_by_price} onFlip={() => setDraft((d) => ({ ...d, route_by_price: !d.route_by_price }))}
+          title="Route by price"
+          desc="Let OpenRouter send each call to the cheapest healthy provider for the chosen model. DeepSeek also discounts off-peak hours (≈16:30–00:30 UTC) automatically on its own end." />
+      </div>
+      <div className="card p-4">
+        <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>Token economy</div>
+        <button className="w-full flex items-center justify-between py-2" onClick={() => setDraft((d) => ({ ...d, lean_mode: !d.lean_mode }))}>
+          <span className="text-left">
+            <span className="block text-[14px]">Lean mode</span>
+            <span className="block text-[11px]" style={{ color: "var(--text-lo)" }}>Compressed instructions + only present/tracked cast in context. ~Half the input tokens, slightly less prose richness.</span>
+          </span>
+          <span style={{ width: 42, height: 24, borderRadius: 999, background: draft.lean_mode ? "var(--accent)" : "var(--ink-3)", position: "relative", flexShrink: 0, transition: "background .2s" }}>
+            <span style={{ position: "absolute", top: 2, left: draft.lean_mode ? 20 : 2, width: 20, height: 20, borderRadius: 999, background: "var(--ink-0)", transition: "left .2s" }} />
+          </span>
+        </button>
+        <div className="mt-2">
+          <TextField label="Token budget per turn (0 = off; e.g. 4000 to cap context)" value={String(draft.token_budget ?? 0)} onChange={(v) => setDraft((d) => ({ ...d, token_budget: Number(v) || 0 }))} mono />
+          <div className="text-[11px] -mt-0.5" style={{ color: "var(--text-lo)" }}>
+            When set, the per-turn context is trimmed toward this many input tokens — shedding offscreen detail, old memories, and rumors first, collapsing only the least-involved present characters as a last resort. People in your scene are never dropped.
+          </div>
+        </div>
+      </div>
+      <div className="card p-4">
+        <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>Cost governor</div>
+        <TextField label="Daily budget in USD (0 = off)" value={String(draft.daily_budget_usd ?? 0)} onChange={(v) => setDraft((d) => ({ ...d, daily_budget_usd: Number(v) || 0 }))} mono />
+        <div className="text-[11px] -mt-0.5" style={{ color: "var(--text-lo)" }}>
+          Soft ceiling, never a wall: past 70% of today's budget the engine quietly shifts to eco — lean prompts and a tightened context — for the rest of the day. Play is never blocked. The Play screen shows spend, the eco state, and cache hit rate live.
+        </div>
+        <TextField label="Auto-chapter every N turns (0 = off)" value={String(draft.chapter_cadence ?? 25)} onChange={(v) => setDraft((d) => ({ ...d, chapter_cadence: Number(v) || 0 }))} mono />
+        <div className="text-[11px] -mt-0.5" style={{ color: "var(--text-lo)" }}>
+          One cheap call per chapter distills the last stretch into a titled summary — shown in Chronicle, carried as one line each in context — so the verbatim history window can stay small without losing the arc.
+        </div>
+      </div>
+      <div className="card p-4">
+        <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>Cast</div>
+        <div className="flex items-center justify-between">
+          <span className="text-[14px]">Central characters</span>
+          <span className="font-mono text-[13px]" style={{ color: "var(--accent)" }}>{draft.max_central_characters ?? 6}</span>
+        </div>
+        <input type="range" min={2} max={12} step={1} value={draft.max_central_characters ?? 6}
+          onChange={(e) => setDraft((d) => ({ ...d, max_central_characters: Number(e.target.value) }))}
+          className="w-full mt-1" style={{ accentColor: "var(--accent)" }} />
+        <div className="text-[11px] mt-1" style={{ color: "var(--text-lo)" }}>
+          How many full, autonomous characters the world holds at once — each with memory, goals, and inner life. Beyond this, new people enter as lightweight background figures (a guard, a vendor) that cost almost nothing and stay simple, until a central slot frees up. Fewer central characters means each gets more presence and autonomy; more means a busier, costlier cast. Default 6.
+        </div>
+      </div>
+      <div className="card p-4">
+        <div className="font-mono text-[10px] uppercase tracking-widest mb-1" style={{ color: "var(--text-lo)" }}>Memory economy</div>
+        <TextField label="Memories per NPC in context (top-k)" value={String(draft.context_memories_k)} onChange={setM("context_memories_k")} mono />
+        <TextField label="Reflection cadence (turns)" value={String(draft.reflection_cadence)} onChange={setM("reflection_cadence")} mono />
+        <TextField label="Verbatim history window (turns)" value={String(draft.history_window)} onChange={setM("history_window")} mono />
+      </div>
+
+
+
+
+
+
+
+      {worldJson !== null && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 95, background: "var(--ink-0)", display: "flex", flexDirection: "column", paddingTop: "env(safe-area-inset-top)" }}>
+          <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--line)" }}>
+            <div className="font-display text-[16px]">Raw world edit</div>
+            <div className="text-[12px] mt-1" style={{ color: "var(--text-mid)" }}>
+              World bible, threads, clocks, places, edges, canon. Delete a clock you don't want, retune the bible, fix the opening. Save writes it straight to the world.
+            </div>
+            {worldErr && <div className="text-[12px] mt-1.5 px-2 py-1 rounded" style={{ color: "var(--danger)", background: "rgba(200,60,60,.12)" }}>{worldErr}</div>}
+            <div className="flex gap-2 mt-2.5">
+              <button className="btn btn-accent" style={{ flex: 1 }} onClick={async () => {
+                try { const parsed = JSON.parse(worldJson); setSave(await api.rawEditWorld(save.id, parsed)); setWorldJson(null); setWorldErr(""); }
+                catch (e) { const m = e instanceof Error ? e.message : String(e); setWorldErr(m.includes("JSON") ? "Invalid JSON — check brackets and commas." : m); }
+              }}>Save world</button>
+              <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setWorldJson(null); setWorldErr(""); }}>Cancel</button>
+            </div>
+          </div>
+          <textarea value={worldJson} onChange={(e) => setWorldJson(e.target.value)} spellCheck={false} autoCapitalize="off" autoCorrect="off"
+            style={{ flex: 1, width: "100%", background: "var(--ink-1)", color: "var(--text-mid)", border: "none", padding: "12px 14px", fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.5 }} />
+        </div>
+      )}
+
 
       <button className="btn btn-ghost w-full" style={{ height: 46 }} onClick={async () => {
         const { name, json } = await api.exportSave(save.id);

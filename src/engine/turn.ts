@@ -11,14 +11,16 @@
  */
 import type { ActionMode, SaveState, SimulatorDiff, TurnTelemetry, Belief, Stance } from "./types";
 import { decidePressure, isDue, pressureDirective, detectPowerTier } from "./pressure";
-import { narratorSystem, simulatorSystem, REFLECTION_SYSTEM, simulatorSchemaHint, stablePrefix, volatileDigest, simulatorContext } from "./prompts";
+import { narratorSystem, simulatorSystem, REFLECTION_SYSTEM, CHAPTER_SYSTEM, simulatorSchemaHint, stablePrefix, volatileDigest, simulatorContext, deltaNote } from "./prompts";
 import { updateMind } from "./mind";
-import { buildMessages, complete, completeStream, safeJson } from "../llm";
+import { buildMessages, buildChatlogMessages, complete, completeStream, safeJson, setLLMPrefs } from "../llm";
 import { advance, heuristicMinutes } from "./time";
 import { applyEdgeDelta, capMemory, consolidateBackground, consolidateTraits, decayTraits, diffuseRumors, needsHistoryCompaction, reinforceOrMergeTrait, tickDrives, playerEdgeSnapshot, tickPsyche } from "./social";
 import { regenerateDrives, seedDrive } from "./drives";
 import { reflectionDue, applyReflection, tickMemoryDecay, reconsolidate, integrationGate, compactGist } from "./memory";
 import { knownNameWhitelist, groundMemoryContent, addFact, filterSuspectBeliefs } from "./facts";
+import { extractHeuristics, backfillDiff } from "./extract";
+import { SIMULATOR_JSON_SCHEMA } from "./schema";
 import { neutralUndertow } from "./undertow";
 import { pushSnapshot, registerCharacter, uid } from "./state";
 
@@ -79,6 +81,57 @@ function reflectSalt(id: string): number {
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
   return Math.abs(h) % 7;
 }
+
+/** MEMGPT-STYLE PAGING — cold central characters' identity cards page OUT of the cached prefix
+ *  to a one-line stub, and page back IN the moment they matter (present, or named in the action
+ *  or recent prose, or strongly bonded to the player). The prefix only changes on transitions,
+ *  which are rare, so cache stability holds between them. Memory/traits are untouched — this
+ *  pages only the identity card's place in context, not the character's mind. */
+export function updatePaging(state: SaveState, action: string): void {
+  if (state.model_settings.paging === false) return;
+  const AWAY_TURNS = 12, BOND_FLOOR = 40;
+  const turn = state.world.current_turn;
+  const recentText = (state.history.slice(-3).map((h) => h.narrator_prose).join(" ") + " " + action).toLowerCase();
+  const lastSeen = new Map<string, number>();
+  for (const t of state.telemetry) for (const pid of t.present) lastSeen.set(pid, t.turn);
+  for (const [id, c] of Object.entries(state.characters)) {
+    if (id === "char_player" || c.central === false || c.status === "dead" || c.status === "departed") continue;
+    const first = c.name.split(/\s+/)[0]?.toLowerCase() ?? "";
+    const named = first.length >= 3 && recentText.includes(first);
+    const present = state.world.present.includes(id);
+    if (present || named) { if (c.paged) c.paged = false; continue; }
+    if (c.paged) continue; // stays paged until presence/mention wakes them
+    const e = state.world.edges.find((x) => x.from === id && x.to === "char_player");
+    const bond = e ? Math.abs(e.warmth) + Math.abs(e.trust) : 0;
+    const away = turn - (lastSeen.get(id) ?? 0);
+    if (away >= AWAY_TURNS && bond < BOND_FLOOR) c.paged = true;
+  }
+}
+
+/** PLACE GC — resolvePlace creates a record for every unmatched name and nothing ever cleaned
+ *  them up, so long campaigns accumulate junk locations. Sweep: over a soft cap, evict places
+ *  that are unoccupied, aren't anyone's location, and aren't referenced in recent play —
+ *  oldest first (creation time is embedded in the uid). */
+export function gcPlaces(state: SaveState, cap = 60): void {
+  const ids = Object.keys(state.world.places);
+  if (ids.length <= cap) return;
+  const used = new Set<string>([state.world.player_location]);
+  for (const c of Object.values(state.characters)) if (c.location) used.add(c.location);
+  const recentText = state.history.slice(-8).map((h) => `${h.narrator_prose} ${h.summary}`).join(" ").toLowerCase();
+  const bornAt = (id: string): number => {
+    const m = /^loc_([0-9a-z]+)/.exec(id);
+    if (!m) return 0;
+    return parseInt(m[1].slice(0, m[1].length - 5), 36) || 0;
+  };
+  const evictable = ids
+    .filter((id) => !used.has(id) && !(state.world.places[id].contains?.length) && !recentText.includes(state.world.places[id].name.toLowerCase()))
+    .sort((a, b) => bornAt(a) - bornAt(b));
+  for (const id of evictable) {
+    if (Object.keys(state.world.places).length <= cap) break;
+    delete state.world.places[id];
+  }
+}
+
 function emptyDiff(): SimulatorDiff {
   return {
     scene_summary: "", elapsed_minutes: 20, facts: [], psyche: [], edges: [], memories: [], appearance: [], drives_update: [],
@@ -103,11 +156,16 @@ function looksNamed(name: string): boolean {
   return /\s/.test(name.trim()) || /^[A-Z]/.test(name.trim());
 }
 
-export async function runTurn(state: SaveState, action: string, ev: TurnEvents, mode: ActionMode = "do", opts?: { ground?: boolean }): Promise<void> {
+export async function runTurn(state: SaveState, action: string, ev: TurnEvents, mode: ActionMode = "do", opts?: { ground?: boolean; eco?: boolean }): Promise<void> {
   const t0 = Date.now();
   const framedAction = MODE_FRAME[mode](action);
   const turn = state.world.current_turn;
-  pushSnapshot(state);
+  setLLMPrefs({ routeByPrice: !!state.model_settings.route_by_price });
+  // ECO (cost governor): a transient posture, never a persisted setting — lean prompts and a
+  // tightened context ceiling for this turn only.
+  const eco = !!opts?.eco;
+  const lean = !!state.model_settings.lean_mode || eco;
+  await pushSnapshot(state);
 
   // 1 ── the undertow turns first: strategy, chaos, catastrophe (deterministic, 0 tokens)
   ev.onPhase("undertow");
@@ -134,8 +192,9 @@ export async function runTurn(state: SaveState, action: string, ev: TurnEvents, 
 
   // 2 ── narrator (streamed)
   ev.onPhase("narrator");
+  updatePaging(state, action);
   const prefix = stablePrefix(state);
-  const digest = volatileDigest(state, action);
+  const digest = volatileDigest(state, action, eco ? { budgetOverride: Math.min(state.model_settings.token_budget || 4000, 3500) } : undefined);
   const god = !!state.world_bible.god_mode;
   // tier is a light gate (blocks the "throw troops at a god" category error); it does NOT script
   // behavior — that emerges from each character's relaxation state via the perception gate.
@@ -205,11 +264,42 @@ export async function runTurn(state: SaveState, action: string, ev: TurnEvents, 
     : "";
   const fullDirective = directive + forbid + forbiddenGate + earnedResponse + stallDirective + "\n" + undertow.directive;
   const groundNote = opts?.ground ? `\n\n=== GROUNDING (this turn) ===\nThis story is set in a real place / based on real subject matter. Use web search to get the real-world facts right — actual locations, layouts, names, how things really work, accurate period or setting detail — and weave that accuracy naturally into the prose. Do not cite sources or break the fiction; just be correct.` : "";
-  const narratorMsgs = buildMessages(
-    narratorSystem(state.model_settings.lean_mode), prefix,
-    `${digest}\n\n=== DIRECTION ===\n${fullDirective}${groundNote}\n\n=== PLAYER ACTION (render exactly, add no interiority) ===\n${framedAction}`,
-    state.model_settings.narrator_model,
-  );
+  // ── CONTEXT MODE ──────────────────────────────────────────────────────────
+  // "digest" (classic): system + stable prefix + full digest rebuilt each turn. Correct, but only
+  //   the prefix rides the provider cache.
+  // "chatlog" (append-only): the SillyTavern economics. The conversation IS the context: a full
+  //   state I-frame is anchored into the system message every `iframe_cadence` turns, and each
+  //   turn thereafter appends only [player action] / [prose] pairs plus a small P-frame delta of
+  //   live state. Between anchors the entire growing history is byte-identical, so providers with
+  //   implicit prefix caching (DeepSeek ~0.1x, Gemini ~0.25x, Anthropic cache_control) bill almost
+  //   all input at the cached rate. Re-anchoring resets the cache once per window — amortized.
+  const chatlog = state.model_settings.context_mode === "chatlog";
+  let narratorMsgs: any[];
+  if (chatlog) {
+    const cad = Math.max(2, state.model_settings.iframe_cadence ?? 6);
+    const castSig = Object.entries(state.characters)
+      .filter(([, c]) => c.status !== "dead" && c.status !== "departed" && c.central !== false && !c.paged)
+      .map(([id]) => id).sort().join(",");
+    const anchor = state.context_anchor;
+    const stale = !anchor || (turn - anchor.turn) >= cad || anchor.cast_sig !== castSig;
+    if (stale) state.context_anchor = { turn, digest: `${prefix}\n\n${digest}`, cast_sig: castSig };
+    const a = state.context_anchor!;
+    const pairs = state.history
+      .filter((h) => h.kind !== "opening" && h.kind !== "interlude" && h.turn >= a.turn)
+      .slice(-cad)
+      .map((h) => ({ user: h.player_action, assistant: h.narrator_prose }));
+    narratorMsgs = buildChatlogMessages(
+      narratorSystem(lean), a.digest, pairs,
+      `${deltaNote(state, action)}\n\n=== DIRECTION ===\n${fullDirective}${groundNote}\n\n=== PLAYER ACTION (render exactly, add no interiority) ===\n${framedAction}`,
+      state.model_settings.narrator_model,
+    );
+  } else {
+    narratorMsgs = buildMessages(
+      narratorSystem(lean), prefix,
+      `${digest}\n\n=== DIRECTION ===\n${fullDirective}${groundNote}\n\n=== PLAYER ACTION (render exactly, add no interiority) ===\n${framedAction}`,
+      state.model_settings.narrator_model,
+    );
+  }
   const stream = completeStream(narratorMsgs, state.model_settings.narrator_model, state.model_settings.fallback_model, 4000, opts?.ground === true);
   let prose = "";
   let narratorUsage: import("../llm").Usage = { prompt_tokens: 0, completion_tokens: 0 };
@@ -227,7 +317,7 @@ export async function runTurn(state: SaveState, action: string, ev: TurnEvents, 
   // prose-adjacent noise a small model confabulates from. The prose it must transcribe is the
   // last thing it reads.
   const simMsgs = buildMessages(
-    simulatorSystem(state.model_settings.lean_mode) + "\n\n" + simulatorSchemaHint(),
+    simulatorSystem(lean) + "\n\n" + simulatorSchemaHint(),
     simulatorContext(state),
     `=== PLAYER ACTION ===\n${framedAction}\n\n=== NARRATOR PROSE (source of truth — transcribe its specifics EXACTLY) ===\n${prose}`,
     state.model_settings.simulator_model,
@@ -236,7 +326,9 @@ export async function runTurn(state: SaveState, action: string, ev: TurnEvents, 
   let diff = emptyDiff();
   let simOk = false;
   try {
-    const res = await complete(simMsgs, state.model_settings.simulator_model, state.model_settings.fallback_model, true, 3000);
+    // constrained decoding: providers that support json_schema enforce the diff shape at the
+    // decoder; `complete` transparently falls back to json_object where unsupported.
+    const res = await complete(simMsgs, state.model_settings.simulator_model, state.model_settings.fallback_model, { schema: SIMULATOR_JSON_SCHEMA, name: "weft_diff" }, 3000);
     simUsage = res.usage;
     const parsed = safeJson<Partial<SimulatorDiff> | null>(res.text, null);
     if (parsed && Object.keys(parsed).length) { diff = { ...emptyDiff(), ...parsed }; simOk = true; }
@@ -256,6 +348,11 @@ export async function runTurn(state: SaveState, action: string, ev: TurnEvents, 
     console.warn(`[turn] simulator failed entirely: ${e.message} — applying heuristics only`);
   }
   if (!simOk) console.warn("[turn] simulator diff unusable — this turn's bookkeeping is thin");
+  // REGEX-FIRST BACKFILL: deterministic extraction of the mechanical, patterned changes
+  // (movement, hand-offs, conditions subsiding, elapsed-time cues). The LLM diff always wins;
+  // heuristics only fill what it missed — and when the diff failed entirely, they turn a
+  // silent-amnesia turn into a "basics still recorded" turn. Zero tokens.
+  diff = backfillDiff(diff, extractHeuristics(state, action, prose));
 
   // 4 ── apply diff + deterministic systems
   ev.onPhase("apply");
@@ -424,9 +521,33 @@ export async function runTurn(state: SaveState, action: string, ev: TurnEvents, 
     }
   }
 
+  gcPlaces(state);
+
+  // ── CHAPTERING: every chapter_cadence turns, one cheap call turns the last stretch of
+  // summaries into a titled chapter — shown in Chronicle and carried as one line each in
+  // context, so the verbatim history window can stay small without losing the arc.
+  const chapCad = state.model_settings.chapter_cadence ?? 25;
+  if (chapCad > 0 && turn > 0 && turn % chapCad === 0) {
+    try {
+      ev.onPhase("reflection");
+      state.chapters ??= [];
+      const fromTurn = (state.chapters.at(-1)?.to_turn ?? 0) + 1;
+      const beats = state.history.filter((h) => h.kind !== "opening" && h.turn >= fromTurn).map((h) => `T${h.turn}: ${h.summary}`).join("\n");
+      if (beats.trim()) {
+        const res = await complete([
+          { role: "system", content: CHAPTER_SYSTEM },
+          { role: "user", content: `Chapter ${state.chapters.length + 1}. Beats:\n${beats.slice(0, 6000)}` },
+        ], state.model_settings.simulator_model, state.model_settings.fallback_model, true, 400);
+        reflectionTokens += res.usage.prompt_tokens + res.usage.completion_tokens;
+        const ch = safeJson<{ title?: string; summary?: string }>(res.text, {});
+        if (ch.summary) state.chapters.push({ idx: state.chapters.length + 1, from_turn: fromTurn, to_turn: turn, title: (ch.title ?? `Chapter ${state.chapters.length + 1}`).slice(0, 60), summary: ch.summary.slice(0, 400) });
+      }
+    } catch (e: any) { console.warn(`[turn] chaptering failed: ${e.message}`); }
+  }
+
   // telemetry
   const tel: TurnTelemetry = {
-    turn, pressure: verdict.pressure, pressure_source: verdict.source,
+    turn, ts: Date.now(), pressure: verdict.pressure, pressure_source: verdict.source,
     narrator_tokens_in: narratorUsage.prompt_tokens, narrator_tokens_out: narratorUsage.completion_tokens,
     simulator_tokens_in: simUsage.prompt_tokens, simulator_tokens_out: simUsage.completion_tokens,
     cached_tokens: (narratorUsage.cached_tokens ?? 0) + (simUsage.cached_tokens ?? 0),
@@ -565,8 +686,13 @@ export function syncPresence(state: SaveState, hint?: string[]): void {
     .filter(([id, c]) => {
       if (id === "char_player" || c.status === "dead" || c.status === "departed" || !c.location) return false;
       if (c.location === ploc) return true; // same exact place
-      const theirLocale = localeOf(state.world.places[c.location]?.name ?? "");
-      return !!playerLocaleName && theirLocale === playerLocaleName; // same building, different room
+      // locale match counts only when at least one of the two names is explicitly a SUB-ROOM
+      // ("House - kitchen"). Two distinct dash-less places whose names merely share a first
+      // word ("Harbor", "Harbor House") must not merge into one scene.
+      const theirName = state.world.places[c.location]?.name ?? "";
+      const plName = state.world.places[ploc]?.name ?? "";
+      const theirLocale = localeOf(theirName);
+      return !!playerLocaleName && theirLocale === playerLocaleName && (/[-–—]/.test(theirName) || /[-–—]/.test(plName));
     })
     .map(([id]) => id);
 }
@@ -792,10 +918,19 @@ export function applyDiff(state: SaveState, diff: SimulatorDiff, action: string,
     if (id !== "char_player" && Math.abs(d) >= 3) shifts.push(d > 0 ? `${nameOf(id)} opened a little.` : `${nameOf(id)} clenched.`);
   }
 
+  const explicitEdges = new Set((diff.edges ?? []).map((e) => `${resolveId(state, e.from)}|${resolveId(state, e.to)}`));
   for (const e of diff.edges ?? []) {
     const from = resolveId(state, e.from), to = resolveId(state, e.to);
     if (!from || !to || from === to) continue;
     applyEdgeDelta(state.world.edges, { from, to, warmth_delta: e.warmth_delta ?? 0, trust_delta: e.trust_delta ?? 0, power_delta: e.power_delta ?? 0, note: e.note, roles_set: e.roles_set }, turn);
+    // RECIPROCAL ECHO: relationships move both ways, but the simulator usually emits one
+    // direction. A meaningful shift echoes back at reduced strength — unless the diff moved
+    // the reverse explicitly, and never INTO the player's own head (their feelings are theirs;
+    // rule 5). Power echoes inverted: standing gained over someone is standing they ceded.
+    const w = e.warmth_delta ?? 0, tr = e.trust_delta ?? 0, pw = e.power_delta ?? 0;
+    if (to !== "char_player" && !explicitEdges.has(`${to}|${from}`) && (Math.abs(w) >= 4 || Math.abs(tr) >= 4 || Math.abs(pw) >= 4)) {
+      applyEdgeDelta(state.world.edges, { from: to, to: from, warmth_delta: Math.round(w * 0.3), trust_delta: Math.round(tr * 0.25), power_delta: Math.round(-pw * 0.5) }, turn);
+    }
     if (to === "char_player") {
       const w = e.warmth_delta ?? 0, tr = e.trust_delta ?? 0;
       if (w <= -5) shifts.push(`${nameOf(from)} cooled toward you.`);

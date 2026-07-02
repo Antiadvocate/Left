@@ -136,7 +136,7 @@ Output ONLY strict JSON:
 export async function runInterlude(state: SaveState, days: number, ev: { onPhase: (p: string) => void }): Promise<void> {
   const t0 = Date.now();
   const turn = state.world.current_turn;
-  pushSnapshot(state);
+  await pushSnapshot(state);
 
   ev.onPhase("world-turning");
   const report = simulateForward(state, days);
@@ -245,11 +245,11 @@ export function condenseForNewChapter(ident: Identity, mem: CharMemory | undefin
   return { carried_memory, carried_traits };
 }
 
-export function embodyCharacter(state: SaveState, targetId: string): { ok: boolean; error?: string } {
+export async function embodyCharacter(state: SaveState, targetId: string): Promise<{ ok: boolean; error?: string }> {
   if (targetId === "char_player") return { ok: false, error: "you are already wearing this one" };
   if (!state.characters[targetId]) return { ok: false, error: "no such character" };
 
-  pushSnapshot(state); // unravel-able, like everything else
+  await pushSnapshot(state); // unravel-able, like everything else
 
   const turn = state.world.current_turn;
   const oldId = uid("char");

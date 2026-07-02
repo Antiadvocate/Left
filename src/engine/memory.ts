@@ -154,7 +154,12 @@ export function retrieveScored(mem: CharMemory, query: string, currentTurn: numb
     .map((m) => ({ m, s: score(m, query, currentTurn, recallerRelaxation, nowLabel), rel: Math.max(relevance(m.content, query), relevance(m.full_content ?? m.content, query)) }))
     .sort((x, y) => y.s - x.s)
     .slice(0, k);
-  for (const x of ranked) x.m.last_accessed_turn = currentTurn; // access refreshes recency
+  for (const x of ranked) {
+    // RICH-GET-RICHER GUARD: a memory the scene actually reached into (real relevance) is
+    // rehearsed — full refresh. One that surfaced only on recency/importance gets a half-step,
+    // so the same top-k can't lock itself in forever by being retrieved.
+    x.m.last_accessed_turn = x.rel >= 0.2 ? currentTurn : Math.round((x.m.last_accessed_turn + currentTurn) / 2);
+  }
   return ranked.map(({ m, rel }) => ({ m, rel }));
 }
 
@@ -164,7 +169,7 @@ export function retrieve(mem: CharMemory, query: string, currentTurn: number, k:
     .sort((x, y) => y.s - x.s)
     .slice(0, k)
     .map((x) => x.m);
-  for (const m of ranked) m.last_accessed_turn = currentTurn; // access refreshes recency
+  for (const m of ranked) m.last_accessed_turn = Math.round((m.last_accessed_turn + currentTurn) / 2); // half-step (see retrieveScored)
   return ranked;
 }
 

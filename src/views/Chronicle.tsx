@@ -172,8 +172,33 @@ export default function Chronicle({ save }: { save: ClientSave }) {
     .slice(-30)
     .reverse();
 
+  const chapters = (save as any).chapters as { idx: number; from_turn: number; to_turn: number; title: string; summary: string }[] | undefined;
+
   return (
     <div className="scroll-y h-full px-4 pb-10 pt-3 space-y-3">
+      {!!chapters?.length && (
+        <Fade delay={0}>
+          <div className="card p-4">
+            <Title>The story so far — chapters</Title>
+            <div className="space-y-2.5 mt-1">
+              {chapters.map((c) => (
+                <div key={c.idx} className="flex gap-3">
+                  <div className="shrink-0 flex flex-col items-center">
+                    <span className="font-mono text-[10px] w-6 h-6 rounded-full flex items-center justify-center"
+                      style={{ background: "var(--ink-2)", color: "var(--accent)" }}>{c.idx}</span>
+                    {c.idx !== chapters[chapters.length - 1].idx && <span className="flex-1 w-px mt-1" style={{ background: "var(--ink-2)" }} />}
+                  </div>
+                  <div className="pb-1">
+                    <div className="text-[13.5px] font-display">{c.title}</div>
+                    <div className="font-mono text-[9px] uppercase tracking-wider" style={{ color: "var(--text-lo)" }}>turns {c.from_turn}–{c.to_turn}</div>
+                    <div className="text-[12.5px] leading-relaxed mt-0.5" style={{ color: "var(--text-mid)" }}>{c.summary}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Fade>
+      )}
       {marginalia.length > 0 && (
         <Fade delay={0}>
           <div className="card p-4">

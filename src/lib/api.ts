@@ -10,8 +10,9 @@ import { buildPreset, PRESET_LIST } from "../engine/presets";
 import { runTurn, syncPresence, resolvePlace } from "../engine/turn";
 import { runInterlude, embodyCharacter, condenseForNewChapter } from "../engine/continuity";
 import { seedDrive } from "../engine/drives";
-import { FORGE_SYSTEM, OPENING_SYSTEM, NEWSEASON_SYSTEM, MEMORY_CONDENSE_SYSTEM, buildPortraitPrompt, buildScenePrompt, stablePrefix, volatileDigest } from "../engine/prompts";
+import { FORGE_SYSTEM, OPENING_SYSTEM, NEWSEASON_SYSTEM, MEMORY_CONDENSE_SYSTEM, INTERVIEW_SYSTEM, buildPortraitPrompt, buildScenePrompt, stablePrefix, volatileDigest } from "../engine/prompts";
 import { formatTime, parseTime } from "../engine/time";
+import { compactMemoryDigest } from "../engine/memory";
 import { groundMemoryContent, knownNameWhitelist } from "../engine/facts";
 import { buildMessages, complete, generateImage, safeJson } from "../llm";
 import { getSave, putSave, deleteSave as dbDelete, listSaves as dbList } from "../store";
@@ -290,7 +291,7 @@ export const api = {
 
   rollback: async (id: string, to_turn: number): Promise<ClientSave> => {
     const s = await need(id);
-    const restored = doRollback(s, to_turn);
+    const restored = await doRollback(s, to_turn);
     if (!restored) throw new Error("no snapshot covers that turn");
     await putSave(restored);
     return clientView(restored);
@@ -435,6 +436,49 @@ export const api = {
     return clientView(s);
   },
 
+
+  /** TRUTH PANEL — the verified-fact ledger, readable and player-editable. Corrections here are
+   *  authoritative: the engine treats ledger facts as verbatim truth in every future digest. */
+  setFacts: async (id: string, char_id: string, facts: { content: string; quote?: string }[]): Promise<ClientSave> => {
+    const s = await need(id);
+    const mem = s.memory[char_id];
+    if (!mem) throw new Error("no such character");
+    mem.facts = facts
+      .map((f) => ({ content: (f.content ?? "").trim().slice(0, 160), turn: s.world.current_turn, quote: f.quote?.slice(0, 160) }))
+      .filter((f) => f.content)
+      .slice(0, 40);
+    await putSave(s);
+    return clientView(s);
+  },
+
+  /** INTERVIEW MODE — talk to a character out of scene. Pure: no state mutation, no turn, no
+   *  memory written; the character answers from their own digest on the cheap model. */
+  interview: async (id: string, char_id: string, question: string, transcript: { q: string; a: string }[] = []): Promise<{ answer: string }> => {
+    const s = await need(id);
+    const c = s.characters[char_id];
+    if (!c || char_id === "char_player") throw new Error("no such character");
+    const cond = s.condition[char_id];
+    const mem = s.memory[char_id];
+    const edge = s.world.edges.find((e) => e.from === char_id && e.to === "char_player");
+    const traits = (s.traits[char_id] ?? []).slice(0, 5).map((t) => `${t.label} — ${t.behavioral_impact}`).join("; ");
+    const memDigest = mem ? compactMemoryDigest(mem, question, s.world.current_turn, 6, s.world.current_time, cond?.psyche.relaxation ?? 0) : "";
+    const ctx = [
+      `CHARACTER: ${c.name}, ${c.age}${c.pronouns ? `, ${c.pronouns}` : ""}. ${c.background}`,
+      c.life_history ? `Since the story began: ${c.life_history}` : "",
+      `Voice: ${c.speech_pattern}. Core: ${c.core_traits.join(", ")}.`,
+      traits ? `Learned: ${traits}` : "",
+      cond ? `Right now: mood ${cond.psyche.mood || "even"}; relaxation ${cond.psyche.relaxation} (colors every answer per the openness rules).` : "",
+      edge ? `Toward the player: ${edge.roles?.length ? edge.roles.join(" & ") + ", " : ""}warmth ${edge.warmth}, trust ${edge.trust}${edge.notes ? ` — ${edge.notes}` : ""}.` : "They barely know the player.",
+      memDigest,
+    ].filter(Boolean).join("\n");
+    const msgs: any[] = [{ role: "system", content: INTERVIEW_SYSTEM }, { role: "user", content: ctx }];
+    msgs.push({ role: "assistant", content: "(I settle in, myself, ready to speak plainly or not at all.)" });
+    for (const t of transcript.slice(-6)) { msgs.push({ role: "user", content: t.q }); msgs.push({ role: "assistant", content: t.a }); }
+    msgs.push({ role: "user", content: question });
+    const out = await complete(msgs, s.model_settings.simulator_model, s.model_settings.fallback_model, false, 500);
+    return { answer: out.text.trim() };
+  },
+
   setTracked: async (id: string, char_id: string, tracked: boolean): Promise<ClientSave> => {
     const s = await need(id);
     const c = s.characters[char_id];
@@ -451,7 +495,7 @@ export const api = {
 
   embody: async (id: string, char_id: string): Promise<ClientSave> => {
     const s = await need(id);
-    const r = embodyCharacter(s, char_id);
+    const r = await embodyCharacter(s, char_id);
     if (!r.ok) throw new Error(r.error);
     await putSave(s);
     return clientView(s);
@@ -573,6 +617,21 @@ export interface TurnEvents {
 /** The turn loop, run locally. Same signature the views already use.
  *  When opts.observe is set, the turn runs with no player action: the world and
  *  the player's own character act on their own, and you watch. */
+
+/** Today's spend (USD) from telemetry — turns whose provider reported a cost, since local midnight. */
+export function todaySpend(telemetry: { ts?: number; turn_cost?: number }[]): number {
+  const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+  const t0 = midnight.getTime();
+  return telemetry.reduce((sum, t) => sum + ((t.ts ?? 0) >= t0 ? (t.turn_cost ?? 0) : 0), 0);
+}
+
+/** Governor verdict for the HUD and the turn loop. */
+export function governorState(s: Pick<SaveState, "telemetry" | "model_settings">): { budget: number; spent: number; eco: boolean; over: boolean } {
+  const budget = s.model_settings.daily_budget_usd ?? 0;
+  const spent = todaySpend(s.telemetry);
+  return { budget, spent, eco: budget > 0 && spent >= budget * 0.7, over: budget > 0 && spent >= budget };
+}
+
 export async function streamTurn(saveId: string, action: string, mode: ActionMode, ev: TurnEvents, opts?: { ground?: boolean; observe?: boolean }): Promise<void> {
   try {
     const s = await need(saveId);
@@ -582,11 +641,16 @@ export async function streamTurn(saveId: string, action: string, mode: ActionMod
     const act = observe
       ? "[OBSERVER] The player takes no action and only watches. Advance the scene on its own: let every present character — INCLUDING the player's own character — act, speak, and pursue their drives as they naturally would in this moment. Do not wait for the player. Move the story forward one concrete beat."
       : action;
+    // COST GOVERNOR: past 70% of the daily budget the engine shifts to eco for the rest of the
+    // day — lean prompts + tightened context — transparently, without touching saved settings.
+    // Play is never blocked; over-budget just means eco + a visible HUD state.
+    const gov = governorState(s);
+    if (gov.eco) ev.onPhase?.("eco");
     await runTurn(s, act, {
       onPhase: (p) => ev.onPhase?.(p),
       onDelta: (t) => ev.onDelta?.(t),
       onMeta: (m) => ev.onMeta?.(m as Record<string, unknown>),
-    }, observe ? "story" : mode, opts);
+    }, observe ? "story" : mode, { ...opts, eco: gov.eco });
     await putSave(s);
     ev.onDone?.(clientView(s));
   } catch (e: any) {

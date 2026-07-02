@@ -54,24 +54,49 @@ export function newSave(name: string, bible: WorldBible): SaveState {
   };
 }
 
-/** Snapshot ring for rollback (plain JSON; IndexedDB handles the size). Origin (turn 1) is pinned forever.
- *  Image data URLs are stripped from snapshots — a rollback point doesn't need the portrait/scene bytes,
- *  and keeping them would multiply megabytes across the ring (the old 17 MB-save culprit). */
-export function pushSnapshot(state: SaveState): void {
+/** gzip a string → base64 (browser CompressionStream); returns null when unavailable. */
+async function gz(text: string): Promise<string | null> {
+  try {
+    if (typeof CompressionStream === "undefined") return null;
+    const cs = new CompressionStream("gzip");
+    const stream = new Blob([text]).stream().pipeThrough(cs);
+    const buf = await new Response(stream).arrayBuffer();
+    let bin = "";
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  } catch { return null; }
+}
+async function gunz(b64: string): Promise<string> {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const ds = new DecompressionStream("gzip");
+  const stream = new Blob([bytes]).stream().pipeThrough(ds);
+  return await new Response(stream).text();
+}
+
+/** Snapshot ring for rollback. Origin (turn 1) is pinned forever. Image data URLs are stripped
+ *  (a rollback point doesn't need portrait bytes), and the JSON is gzip-compressed when the
+ *  browser supports CompressionStream — long campaigns with fact ledgers and life histories
+ *  would otherwise carry 7 full-state copies per save. Falls back to plain JSON silently. */
+export async function pushSnapshot(state: SaveState): Promise<void> {
   if (state.snapshots.some((s) => s.turn === state.world.current_turn)) return;
   const { snapshots, ...rest } = state;
   const lean = JSON.parse(JSON.stringify(rest)) as Omit<SaveState, "snapshots">;
   for (const c of Object.values(lean.characters)) if (c.portrait_url?.startsWith("data:")) delete c.portrait_url;
   for (const h of lean.history) if ((h as any).illustration_url?.startsWith?.("data:")) delete (h as any).illustration_url;
   const blob = JSON.stringify(lean);
-  state.snapshots.push({ turn: state.world.current_turn, blob });
+  const zipped = await gz(blob);
+  state.snapshots.push(zipped ? { turn: state.world.current_turn, blob: zipped, z: true } : { turn: state.world.current_turn, blob });
   while (state.snapshots.length > 7) state.snapshots.splice(1, 1);
 }
 
-export function rollback(state: SaveState, toTurn: number): SaveState | null {
+export async function rollback(state: SaveState, toTurn: number): Promise<SaveState | null> {
   const snap = [...state.snapshots].reverse().find((s) => s.turn <= toTurn);
   if (!snap) return null;
-  const restored = JSON.parse(snap.blob) as SaveState;
+  const raw = snap.z ? await gunz(snap.blob) : snap.blob;
+  const restored = JSON.parse(raw) as SaveState;
   restored.snapshots = state.snapshots.filter((s) => s.turn < snap.turn);
   return restored;
 }
@@ -83,6 +108,7 @@ export function sanitize(state: SaveState): SaveState {
   state.world.focus ??= null;
   for (const c of Object.values(state.condition ?? {})) (c as any).condition_age ??= {};
   state.telemetry ??= []; state.pressure_trace ??= []; state.snapshots ??= []; state.records ??= [];
+  state.chapters ??= [];
   state.minds ??= {};
   for (const id of Object.keys(state.characters)) {
     state.condition[id] ??= blankCondition();

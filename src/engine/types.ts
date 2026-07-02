@@ -23,6 +23,22 @@ export interface ModelSettings {
   token_budget?: number;          // when set (>0), trim the per-turn context to roughly this many input tokens, shedding least-relevant first
   tension?: number;               // 0–10 master dial for how much the world throws at you. 0 = the engine originates NOTHING new (no new threads/consequences/clocks/drives); the world only responds to what you do. Higher = more friction, faster escalation. Default 5.
   max_central_characters?: number; // cap on CENTRAL (full-fidelity, tracked) characters. Default 6. Beyond this, new characters become "non-central" — minimal-footprint background figures (environment-like) with simple handling, unless promoted. Tunable.
+  context_mode?: "digest" | "chatlog"; // chatlog = append-only conversation context (I-frame anchor + per-turn deltas) so providers cache nearly the whole input; digest = classic rebuilt-each-turn context
+  iframe_cadence?: number;        // chatlog mode: turns between full state re-anchors (default 6)
+  route_by_price?: boolean;       // OpenRouter provider sort: price — route each call to the cheapest healthy provider
+  daily_budget_usd?: number;      // cost governor: soft daily budget; past 70% the engine auto-runs eco (lean + tight context)
+  chapter_cadence?: number;       // auto-chapter every N turns (0 = off, default 25) — one cheap call, shown in Chronicle + one line each in context
+  paging?: boolean;               // MemGPT-style paging: cold central characters' identity cards page out of the prefix to one-line stubs until they matter again
+}
+
+/** An auto-generated chapter of the story — one cheap summarization call every chapter_cadence
+ *  turns. Lets the verbatim history window stay small without losing arc awareness. */
+export interface Chapter {
+  idx: number;
+  from_turn: number;
+  to_turn: number;
+  title: string;
+  summary: string;
 }
 
 export interface WorldBible {
@@ -102,6 +118,7 @@ export interface NPCDrive {
 
 export interface Identity {
   character_id: string;
+  paged?: boolean;            // MemGPT-style: identity card paged out of the cached prefix (cold character); rehydrates on presence/mention
   name: string;
   age: number;
   pronouns?: string;          // "she/her", "he/him", "they/them" — pinned so the narrator never has to guess gender
@@ -307,6 +324,7 @@ export interface TurnTelemetry {
   simulator_tokens_out: number;
   reflection_tokens: number;
   duration_ms: number;
+  ts?: number;                 // wall-clock ms — fuels the daily cost governor
   word_count: number;
   player_mood_valence: number;
   present: string[];
@@ -359,7 +377,9 @@ export interface SaveState {
   telemetry: TurnTelemetry[];
   pressure_trace: number[];    // controller history
   records: { id: string; type: string; title: string; contents: string; location: string }[];
-  snapshots: { turn: number; blob: string }[]; // rollback ring (compressed JSON), max 6
+  chapters?: Chapter[];        // auto-generated story chapters (see Chapter)
+  context_anchor?: { turn: number; digest: string; cast_sig: string }; // chatlog mode I-frame: the full state snapshot the conversation is anchored to
+  snapshots: { turn: number; blob: string; z?: boolean }[]; // rollback ring, max 7; z = gzip+base64 compressed
 }
 
 // ───────────────────────────── simulator contract ─────────────────────────────

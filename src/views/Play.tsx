@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { BookOpen, Compass, CornerDownLeft, Crosshair, Globe, Image as ImageIcon, Moon, Play as PlayIcon, RotateCcw, X } from "lucide-react";
-import { api, streamTurn, type ActionMode, type ClientSave } from "../lib/api";
+import { BarChart3, BookOpen, Compass, CornerDownLeft, Crosshair, Globe, Globe2, Image as ImageIcon, Leaf, Moon, Play as PlayIcon, RotateCcw, Users, X } from "lucide-react";
+import { api, streamTurn, governorState, type ActionMode, type ClientSave } from "../lib/api";
+import Cast from "./Cast";
+import World from "./World";
+import Chronicle from "./Chronicle";
 import { Seismograph } from "../lib/charts";
 import { AnalogClock, WeatherIcon } from "../lib/format";
 
@@ -12,6 +15,7 @@ const PHASE_LABEL: Record<string, string> = {
   apply: "consequences settle",
   reflection: "memories distill",
   "world-turning": "the world turns without you",
+  eco: "eco — spending gently today",
   undertow: "the undertow shifts",
   interlude: "days pass",
 };
@@ -43,6 +47,8 @@ export default function Play({ save, setSave }: { save: ClientSave; setSave: (s:
   const [observing, setObserving] = useState(false);
   const [chaptering, setChaptering] = useState(false);
   const [presentOpen, setPresentOpen] = useState(false);
+  const [drawer, setDrawer] = useState<null | "cast" | "world" | "chronicle">(null);
+  const [drawerSel, setDrawerSel] = useState<string | null>(null);
   const observingRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const toastId = useRef(0);
@@ -232,7 +238,39 @@ export default function Play({ save, setSave }: { save: ClientSave; setSave: (s:
         <button className="chip" onClick={() => setRollbackOpen(true)} disabled={!save.snapshot_turns.length}>
           <RotateCcw size={11} /> {save.world.current_turn}
         </button>
+        <button className="chip" onClick={() => { setDrawerSel(null); setDrawer("cast"); }} title="cast"><Users size={11} /></button>
+        <button className="chip" onClick={() => setDrawer("world")} title="world"><Globe2 size={11} /></button>
+        <button className="chip" onClick={() => setDrawer("chronicle")} title="chronicle"><BarChart3 size={11} /></button>
       </div>
+
+      {/* cost HUD — spend, cache, eco, one-tap lean */}
+      {(() => {
+        const gov = governorState(save as any);
+        const sess = save.telemetry;
+        const inTok = sess.reduce((a, t) => a + t.narrator_tokens_in + t.simulator_tokens_in, 0);
+        const cached = sess.reduce((a, t) => a + (t.cached_tokens ?? 0), 0);
+        const hit = inTok > 0 ? Math.round((cached / inTok) * 100) : 0;
+        const spend = sess.reduce((a, t) => a + (t.turn_cost ?? 0), 0);
+        return (
+          <div className="px-4 pb-0.5 flex items-center gap-2 font-mono text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text-lo)" }}>
+            <span title="provider-reported spend across this save's recent turns">{spend > 0 ? `$${spend.toFixed(2)}` : "$—"}</span>
+            <span title="share of input tokens served from provider prompt cache">cache {hit}%</span>
+            {gov.budget > 0 && (
+              <span className="flex items-center gap-1" title={`today $${gov.spent.toFixed(2)} of $${gov.budget.toFixed(2)} budget${gov.eco ? " — eco engaged" : ""}`}>
+                <span className="inline-block rounded-full" style={{ width: 46, height: 4, background: "var(--ink-2)", overflow: "hidden" }}>
+                  <span className="block h-full" style={{ width: `${Math.min(100, (gov.spent / gov.budget) * 100)}%`, background: gov.over ? "var(--danger)" : gov.eco ? "var(--accent)" : "var(--calm)" }} />
+                </span>
+                {gov.eco && <span style={{ color: "var(--accent)" }} className="flex items-center gap-0.5"><Leaf size={9} /> eco</span>}
+              </span>
+            )}
+            <button className="ml-auto flex items-center gap-1" title="lean mode — compressed prompts, present/tracked cast only (persists)"
+              style={save.model_settings.lean_mode ? { color: "var(--accent)" } : undefined}
+              onClick={async () => setSave(await api.settings(save.id, { ...save.model_settings, lean_mode: !save.model_settings.lean_mode }))}>
+              <Leaf size={10} /> lean {save.model_settings.lean_mode ? "on" : "off"}
+            </button>
+          </div>
+        );
+      })()}
 
       {/* prose scroll */}
       <div ref={scrollRef} className="scroll-y flex-1 px-5 pb-4">
@@ -348,11 +386,13 @@ export default function Play({ save, setSave }: { save: ClientSave; setSave: (s:
                 const ch = save.characters[pid];
                 if (!ch) return null;
                 return (
-                  <span key={pid} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full"
-                    style={{ background: "var(--ink-2)", fontSize: 11.5 }}>
+                  <button key={pid} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full"
+                    style={{ background: "var(--ink-2)", fontSize: 11.5 }}
+                    title={`open ${ch.name}`}
+                    onClick={() => { setDrawerSel(pid); setDrawer("cast"); }}>
                     {ch.portrait_url && <img src={ch.portrait_url} alt="" className="w-4 h-4 rounded-full object-cover" />}
                     {ch.name}
-                  </span>
+                  </button>
                 );
               })}
             </div>
@@ -535,6 +575,35 @@ export default function Play({ save, setSave }: { save: ClientSave; setSave: (s:
                     </span>
                   </button>
                 ))}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* ONE PLAY SURFACE, THREE DRAWERS — the full Cast/World/Chronicle views mount as
+          slide-overs so the loop of "check something, keep playing" never leaves the scene.
+          The bottom tabs still work; these are the fast path. */}
+      <AnimatePresence>
+        {drawer && (
+          <>
+            <motion.div className="drawer-veil fixed inset-0 z-40"
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setDrawer(null)} />
+            <motion.div className="fixed inset-y-0 right-0 z-50 flex flex-col"
+              style={{ width: "min(560px, 94vw)", background: "var(--bg, var(--ink-0))", borderLeft: "1px solid var(--line-strong)", boxShadow: "-24px 0 60px rgba(0,0,0,.45)" }}
+              initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }}
+              transition={{ type: "spring", stiffness: 360, damping: 40 }}>
+              <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: "1px solid var(--ink-2)" }}>
+                <div className="font-mono text-[10px] uppercase tracking-widest" style={{ color: "var(--text-lo)" }}>
+                  {drawer === "cast" ? "cast" : drawer === "world" ? "world" : "chronicle"}
+                </div>
+                <button onClick={() => setDrawer(null)}><X size={16} style={{ color: "var(--text-lo)" }} /></button>
+              </div>
+              <div className="flex-1 min-h-0">
+                {drawer === "cast" && <Cast key={drawerSel ?? "none"} save={save} setSave={setSave} initialSel={drawerSel} />}
+                {drawer === "world" && <World save={save} />}
+                {drawer === "chronicle" && <Chronicle save={save} />}
               </div>
             </motion.div>
           </>

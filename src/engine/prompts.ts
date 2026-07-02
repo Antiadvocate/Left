@@ -240,6 +240,10 @@ RULES:
 
 Output ONLY JSON: {"memories":[{"content":"their POV of what happened, one tight sentence","importance":6,"emotional_charge":"resentment"}]}`;
 
+export const CHAPTER_SYSTEM = `You title and summarize one chapter of an ongoing interactive story from its turn-by-turn beats. Capture the arc: what changed, who it changed between, and where things stand — in the story's actual register (dark/explicit if it was; never sanitize). 2-3 sentences. Output ONLY JSON: {"title":"3-6 words","summary":"2-3 sentences, past tense"}`;
+
+export const INTERVIEW_SYSTEM = `You are a single character from an ongoing story, speaking OUT OF SCENE in a quiet aside with the player — a conversation that leaves no trace in the world. Stay entirely in character: their voice, their knowledge and ONLY their knowledge (their memories, verified facts, beliefs, and feelings as given — if they don't know something, they don't know it), their current mood coloring their answers through the openness rules. They may deflect, lie, or refuse exactly as this person would. Never break character, never mention being an AI or a game, never reveal engine terms. Answer in 1-2 short paragraphs of plain speech, first person.`;
+
 export const OPENING_SYSTEM = `You write the OPENING SCENE of an interactive story — the moment the player arrives in this world, before they have acted. Set the stage: establish where they are, who is present, the mood, and the immediate situation, ending on a beat that invites the player to act. Honor the PLAYER'S STANDING DIRECTION above all (if a topic is marked incidental, keep it incidental). Write in the world's voice. 2–4 paragraphs, 120–260 words. Second person ("you"). Dialogue in quotes. No headers, no lists, no meta, no "Turn 1" — just the scene. Do not resolve anything; open it.`;
 
 export const NEWSEASON_SYSTEM = `You turn a long, finished playthrough into the clean starting point for a NEW chapter — like a "season 2" that carries the consequences but starts fresh. You are given the world bible, the cast with their evolved traits and relationships, recent events, threads, and current situation.
@@ -279,6 +283,41 @@ relationships: an NPC's warmth/trust toward the player reflects a relationship t
 texture: for the player and each NPC, give 2–3 small standing things drawn from their background — an enduring interest, a quirk, a sensitivity, a habit ("loves a good tree on a quiet walk", "always cold", "knows far too much about rocks", "hums when nervous", "collects other people's pens"). These are NOT their personality or their plot — they are the small human texture that surfaces in idle moments. Keep each to a few words. Make them specific and a little surprising, not generic.`;
 
 // ───────────────────── digest builders (volatile suffix) ─────────────────────
+
+/** P-FRAME (chatlog mode): the small per-turn state delta appended after the conversation
+ *  history. The I-frame anchor carries the full digest; this carries only what is live NOW —
+ *  compact present-state lines and the top couple of scene-cued recalls per present character.
+ *  Everything else (bible, cast, canon, threads) lives in the anchor + the prose itself. */
+export function deltaNote(state: SaveState, query: string): string {
+  const turn = state.world.current_turn;
+  const loc = state.world.places[state.world.player_location];
+  const lines: string[] = [
+    `=== STATE NOW (deltas since the anchored snapshot; this is law) ===`,
+    `Turn ${turn} | ${state.world.current_time} | Weather: ${state.world.weather} | Scene: ${loc?.name ?? state.world.player_location}`,
+  ];
+  for (const id of ["char_player", ...state.world.present]) {
+    const c = state.characters[id]; const cond = state.condition[id];
+    if (!c || !cond) continue;
+    if (id === "char_player") { lines.push(`— YOU: ${cond.psyche.active_states.join(", ") || "—"}${cond.conditions.length ? `; ${cond.conditions.join(", ")}` : ""}`); continue; }
+    if (c.central === false) { lines.push(`— ${c.name} (background), ${cond.psyche.mood || "even"}`); continue; }
+    const e = state.world.edges.find((x) => x.from === id && x.to === "char_player");
+    const bits = [
+      `${c.name} [${id}]${c.pronouns ? ` · ${c.pronouns}` : ""} — mood ${cond.psyche.mood || "even"}; seeing: ${describeOpenness(cond)}`,
+      c.drive?.goal || c.current_goal ? `wants: ${c.current_goal || c.drive!.goal}` : "",
+      e ? `toward player: ${e.roles?.length ? e.roles.join(" & ") + ", " : ""}w${e.warmth}/t${e.trust}` : "",
+    ].filter(Boolean).join("; ");
+    lines.push(`— ${bits}`);
+    const mem = state.memory[id];
+    if (mem) {
+      const digest = compactMemoryDigest(mem, query, turn, 2, state.world.current_time, cond.psyche.relaxation);
+      const recalls = digest.split("\n").find((l) => l.startsWith("RECALLS"));
+      if (recalls) lines.push(`  ${recalls}`);
+    }
+  }
+  const shifts = state.history.at(-1)?.shifts;
+  if (shifts?.length) lines.push(`Shifts last turn: ${shifts.slice(0, 5).join(" | ")}`);
+  return lines.join("\n");
+}
 
 /** SIMULATOR CONTEXT — the bookkeeper's own minimal view. It replaces sending the full
  *  narrator prefix+digest to the simulator (which cost ~5–6k tokens/turn and, worse, buried a
@@ -454,7 +493,7 @@ export function stablePrefix(state: SaveState): string {
   // deterministic order that doesn't shift as the characters map is mutated.
   const cast = Object.entries(state.characters)
     .filter(([, c]) => c.status !== "dead" && c.status !== "departed")
-    .filter(([id, c]) => id === "char_player" || c.central !== false)  // non-central = environment, no identity card
+    .filter(([id, c]) => id === "char_player" || (c.central !== false && !c.paged))  // non-central = environment; paged = cold, card lives out of context until they matter
     .sort(([a], [b2]) => a.localeCompare(b2))
     .map(([id, c]) => charCard(id, c, state.condition[id], [], true))
     .join("\n");
@@ -481,22 +520,27 @@ ${cast}`;
 }
 
 /** VOLATILE DIGEST: present-character live state, memories, world snapshot. */
-export function volatileDigest(state: SaveState, query: string): string {
+export function volatileDigest(state: SaveState, query: string, opts?: { budgetOverride?: number }): string {
   const k = state.model_settings.context_memories_k;
   const turn = state.world.current_turn;
-  const budget = state.model_settings.token_budget && state.model_settings.token_budget > 0 ? state.model_settings.token_budget : 0;
+  const budget = opts?.budgetOverride && opts.budgetOverride > 0
+    ? opts.budgetOverride
+    : (state.model_settings.token_budget && state.model_settings.token_budget > 0 ? state.model_settings.token_budget : 0);
   const estTok = (str: string) => Math.round(str.length / 4);
 
   const canonBlock = state.world.canon?.length
     ? `=== ESTABLISHED CANON (world-altering facts; EVERY character knows these and lives accordingly) ===\n${state.world.canon.map((c) => `• ${c}`).join("\n")}\n\n`
     : "";
+  const chaptersBlock = state.chapters?.length
+    ? `=== STORY SO FAR (chapters) ===\n${state.chapters.slice(-6).map((c) => `${c.idx}. ${c.title}: ${c.summary}`).join("\n")}\n\n`
+    : "";
 
   // Build each present character's block at a chosen detail level:
   //  2 = full, 1 = identity + mood + voice only, 0 = one-liner (group-collapse fallback)
+  const lastProseText = ([...state.history].reverse().find((h) => h.narrator_prose)?.narrator_prose ?? "").toLowerCase();
   const involvement = (id: string): number => {
     // crude relevance: mentioned in last prose, or has a strong edge to player, or is tracked
-    const lp = [...state.history].reverse().find((h) => h.narrator_prose);
-    const named = lp ? lp.narrator_prose.toLowerCase().includes((state.characters[id]?.name ?? "").toLowerCase().split(/\s+/)[0]) : false;
+    const named = lastProseText ? lastProseText.includes((state.characters[id]?.name ?? "").toLowerCase().split(/\s+/)[0]) : false;
     const e = state.world.edges.find((x) => x.from === id && x.to === "char_player");
     const strong = e ? Math.abs(e.warmth) + Math.abs(e.trust) : 0;
     return (named ? 100 : 0) + strong + (state.characters[id]?.tracked ? 20 : 0);
@@ -586,10 +630,12 @@ export function volatileDigest(state: SaveState, query: string): string {
     // offscreen: full list at lvl>=3, trimmed at lvl 2, dropped below
     const offAll = Object.entries(state.characters)
       .filter(([id, c]) => id !== "char_player" && !state.world.present.includes(id) && c.status !== "dead" && c.status !== "departed");
+    const stubs = offAll.filter(([, c]) => c.paged).map(([, c]) => `${c.name} (dormant — full card paged out; wake by naming them)`);
+    const offLive = offAll.filter(([, c]) => !c.paged);
     const offscreenCast = lvl >= 3
-      ? offAll.map(([, c]) => `${c.name} — at ${placeName(c.location)}: ${c.current_activity || c.drive?.goal || "about their life"}`).join("; ")
+      ? [...offLive.map(([, c]) => `${c.name} — at ${placeName(c.location)}: ${c.current_activity || c.drive?.goal || "about their life"}`), ...stubs].join("; ")
       : lvl >= 2
-        ? offAll.filter(([id]) => state.characters[id]?.tracked).map(([, c]) => `${c.name} — ${c.drive?.goal || "elsewhere"}`).join("; ")
+        ? [...offLive.filter(([id]) => state.characters[id]?.tracked).map(([, c]) => `${c.name} — ${c.drive?.goal || "elsewhere"}`), ...stubs].join("; ")
         : "";
 
     // recent turns: full window at lvl>=2, just the last summary below; last prose always kept
@@ -606,7 +652,7 @@ export function volatileDigest(state: SaveState, query: string): string {
     // ORDER = VOLATILITY. Canon/threads/clocks change rarely; they lead so the provider's
     // implicit prefix cache extends past the stable prefix into the digest. The turn/time line —
     // guaranteed to change every turn — goes as late as possible.
-    return `${canonBlock}${threadsBlock}${clocksBlock}${focusBlock}${offBlock}=== NOW ===
+    return `${canonBlock}${chaptersBlock}${threadsBlock}${clocksBlock}${focusBlock}${offBlock}=== NOW ===
 Turn ${turn} | ${state.world.current_time} | Weather: ${state.world.weather}
 Scene: ${loc ? `${loc.name} — ${loc.description_facts}` : state.world.player_location}${loc?.contains.length ? ` | Here with you: ${loc.contains.filter((id) => id !== "char_player").map((id) => state.characters[id]?.name ?? id).join(", ") || "no one"}` : ""}
 Player carries: ${state.world.money || "—"}
