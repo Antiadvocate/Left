@@ -7,7 +7,7 @@ import type { BarkTag, Doctrine, MissionEventKind, MissionSpec, Soldier, Tier } 
 import { decideEnemy, scamperTile } from "./ai";
 import { cheb, coverAgainst, dist, DIRS8, generateMap, hasLos, idx, inBounds, occupied, pathTo, reachable, SIGHT, tileAt } from "./grid";
 import { alive, canAct, canTarget, enemyUnit, shotInfo, squadUnit, WEAPONS, type ShotInfo } from "./rules";
-import type { CombatState, LogEntry, PairInfo, Pt, Unit } from "./types";
+import type { CombatState, Fx, LogEntry, PairInfo, Pt, Unit } from "./types";
 
 export const TIER_RANK: Record<Tier, number> = { stranger: 0, familiar: 1, bonded: 2, deep: 3 };
 export const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -44,6 +44,12 @@ function rollInt(s: CombatState, lo: number, hi: number): number {
 export function log(s: CombatState, kind: LogEntry["kind"], text: string, speaker?: string) {
   s.log.push({ turn: s.turn, kind, text, speaker });
 }
+export function fx(s: CombatState, f: Fx) {
+  (s.fx ??= []).push(f);
+}
+const fxUnit = (s: CombatState, u: Unit) => fx(s, { k: "unit", id: u.id, hp: u.hp, downed: u.downed, dead: u.dead, evacuated: u.evacuated });
+const float = (s: CombatState, u: Unit, text: string, tone: "warn" | "bond" | "habit" | "info" = "info") => fx(s, { k: "float", id: u.id, text, tone });
+
 function event(s: CombatState, kind: MissionEventKind, actor: Unit, target?: Unit, note?: string) {
   s.events.push({ kind, turn: s.turn, actor: actor.soldierId ?? actor.id, target: target ? target.soldierId ?? target.id : undefined, note });
 }
@@ -53,6 +59,7 @@ export function bark(s: CombatState, u: Unit, tag: BarkTag, partner?: Unit) {
   if (!lines?.length) return;
   const line = lines[Math.floor(roll(s) * lines.length)].replaceAll("{p}", partner?.name ?? "them");
   log(s, "bark", line, u.name);
+  fx(s, { k: "bark", id: u.id, text: line });
 }
 
 export const squadUnits = (s: CombatState) => s.units.filter((u) => u.side === "squad");
@@ -123,6 +130,7 @@ export function startCombat(o: StartOptions): CombatState {
     doctrine: o.doctrine ?? DEFAULT_DOCTRINE,
     squadMood: o.squadMood,
     seenEnemies: [],
+    fx: [],
   };
   // squad slots, honouring "take-dead-position" habits
   const order = o.squad.slice(0, 6);
@@ -189,9 +197,11 @@ export function setFear(s: CombatState, u: Unit, v: number, silent = false) {
     u.terrifiedEver = true;
     event(s, "terrified", u);
     log(s, "warn", `${u.name} is terrified.`);
+    float(s, u, "TERRIFIED", "warn");
     bark(s, u, "terrified");
   } else if (u.fearState === "shaken" && prev === "steady") {
     log(s, "warn", `${u.name} is shaken.`);
+    float(s, u, "SHAKEN", "warn");
   } else if (prev === "terrified") {
     log(s, "info", `${u.name} steadies, a little.`);
   }
@@ -220,6 +230,7 @@ function turnStartFear(s: CombatState, u: Unit) {
 
 function beginPlayerTurn(s: CombatState, first = false) {
   s.side = "squad";
+  if (!first) fx(s, { k: "turn", side: "squad" });
   for (const u of squadUnits(s)) {
     if (!alive(u)) continue;
     u.overwatch = false;
@@ -246,6 +257,7 @@ function beginPlayerTurn(s: CombatState, first = false) {
         if (flankers.length && u.ap > 1) {
           u.ap = 1;
           log(s, "habit", `${u.name} ${eff.text}. Loses a beat.`);
+          float(s, u, "FREEZES", "habit");
           event(s, "habit", u, undefined, eff.text);
         }
       }
@@ -262,6 +274,7 @@ function beginPlayerTurn(s: CombatState, first = false) {
           }
           if (best) {
             log(s, "habit", `${u.name} breaks cover toward ${them.name} before anyone gives the order.`);
+            float(s, u, `→ ${them.name}`, "habit");
             event(s, "habit", u, them, eff.text);
             u.ap -= 1;
             walk(s, u, pathTo(s, opts, best.x, best.y));
@@ -293,6 +306,7 @@ export function endTurn(s: CombatState) {
 
 function enemyTurn(s: CombatState) {
   s.side = "accord";
+  fx(s, { k: "turn", side: "accord" });
   checkActivation(s);
   for (const e of enemyUnits(s)) {
     if (s.outcome) return;
@@ -352,6 +366,7 @@ function onEnemySighted(s: CombatState, e: Unit) {
     if (!hasLos(s, u, e) || !canTarget(u, e, dist(u, e))) continue;
     u.shootFirstUsed = true;
     log(s, "habit", `${u.name} fires before anyone finishes the callout.`);
+    float(s, u, "FIRES FIRST", "habit");
     event(s, "habit", u, e, "shoot-first");
     fire(s, u, e, { reaction: true, free: true });
     if (!canAct(e)) return;
@@ -386,6 +401,7 @@ function walk(s: CombatState, u: Unit, path: Pt[]) {
   for (let i = 1; i < path.length; i++) {
     u.x = path[i].x;
     u.y = path[i].y;
+    fx(s, { k: "step", id: u.id, x: u.x, y: u.y });
     reactTo(s, u);
     if (!canAct(u) || s.outcome) return;
     if (u.side === "squad") checkActivation(s);
@@ -402,11 +418,13 @@ function reactTo(s: CombatState, mover: Unit) {
     const hold = w.effects.find((e) => e.effect === "hold-fire-on" && e.value === mover.enemyType);
     if (hold) {
       log(s, "habit", `${w.name} holds fire as the ${mover.name.toLowerCase()} crosses. ${w.name} ${hold.text}.`);
+      float(s, w, "HOLDS FIRE", "habit");
       w.overwatch = false;
       continue;
     }
     w.overwatch = false;
     log(s, "info", `${w.name} — overwatch.`);
+    float(s, w, "OVERWATCH", "info");
     fire(s, w, mover, { reaction: true, free: true });
     // shared overwatch: a bonded partner fires on the same trigger
     if (w.side === "squad") {
@@ -416,6 +434,7 @@ function reactTo(s: CombatState, mover: Unit) {
         p.sharedTurn = s.turn;
         p.overwatch = false;
         log(s, "bond", `${p.name} fires on ${w.name}'s trigger.`);
+        float(s, p, "SHARED OVERWATCH", "bond");
         fire(s, p, mover, { reaction: true, free: true, extraAim: -Math.round((1 - bondScale(info, p)) * 20) });
       }
     }
@@ -478,6 +497,7 @@ function checkRefusal(s: CombatState, u: Unit, risk: Risk, what: string): boolea
   u.ap = Math.max(0, u.ap - 1);
   bark(s, u, "refusal");
   log(s, "warn", `${u.name} refuses to ${what}. Holds position.`);
+  float(s, u, "REFUSES", "warn");
   event(s, "refusal", u, undefined, what);
   return true;
 }
@@ -546,6 +566,8 @@ function fire(s: CombatState, a: Unit, t: Unit, o: { reaction?: boolean; free?: 
         if (dq < dist(t, a) && dq < best + 2) { spot = q; best = dq; }
       }
       p.x = spot.x; p.y = spot.y;
+      fx(s, { k: "place", id: p.id, x: p.x, y: p.y });
+      float(s, p, "COVERING LUNGE", "bond");
       p.lungeUsed = true;
       log(s, "bond", `${p.name} throws themself between ${t.name} and the shot.`);
       event(s, "lunge", p, t);
@@ -564,9 +586,11 @@ function fire(s: CombatState, a: Unit, t: Unit, o: { reaction?: boolean; free?: 
     let dmg = rollInt(s, a.dmg[0], a.dmg[1]);
     const crit = roll(s) * 100 < info.crit;
     if (crit) dmg = Math.round(dmg * 1.5);
+    fx(s, { k: "shot", from: a.id, to: t.id, hit: true, dmg, crit });
     log(s, "hit", `${a.name} hits ${t.name} for ${dmg}${crit ? " (critical)" : ""}. [${info.hit}%]`);
     damage(s, t, dmg, a, info.flanked);
   } else {
+    fx(s, { k: "shot", from: a.id, to: t.id, hit: false, dmg: 0, crit: false });
     log(s, "miss", `${a.name} misses ${t.name}. [${info.hit}%]`);
     if (a.side === "squad" && roll(s) < 0.3) bark(s, a, "miss");
   }
@@ -574,6 +598,11 @@ function fire(s: CombatState, a: Unit, t: Unit, o: { reaction?: boolean; free?: 
 }
 
 function damage(s: CombatState, t: Unit, dmg: number, src: Unit | null, exposed: boolean) {
+  applyDamage(s, t, dmg, src, exposed);
+  fxUnit(s, t);
+}
+
+function applyDamage(s: CombatState, t: Unit, dmg: number, src: Unit | null, exposed: boolean) {
   t.hp -= dmg;
   if (t.side === "squad") {
     s.damageTaken[t.soldierId!] = (s.damageTaken[t.soldierId!] ?? 0) + dmg;
@@ -628,6 +657,7 @@ function onAllyDown(s: CombatState, t: Unit, fearAll: number, fearPartner: numbe
       u.rageTurns = 2;
       u.ammo = u.clip;
       log(s, "bond", `${u.name} slams a fresh magazine home and stops taking cover.`);
+      float(s, u, "RAGE RELOAD", "bond");
     }
   }
 }
@@ -638,6 +668,7 @@ function killUnit(s: CombatState, u: Unit, how: string) {
   u.downed = false;
   u.hp = 0;
   log(s, "warn", `${u.name} is dead (${how}).`);
+  fxUnit(s, u);
   event(s, "died", u, undefined, how);
   if (how !== "left behind") onAllyDown(s, u, 15, 25);
 }
@@ -664,6 +695,7 @@ export function orderOverwatch(s: CombatState, u: Unit): OrderResult {
   u.ap = 0;
   u.overwatch = true;
   log(s, "info", `${u.name} on overwatch.`);
+  float(s, u, "OVERWATCH", "info");
   return { ok: true };
 }
 
@@ -672,6 +704,7 @@ export function orderReload(s: CombatState, u: Unit): OrderResult {
   if (!spend(s, u)) return { ok: false };
   u.ammo = u.clip;
   log(s, "info", `${u.name} reloads.`);
+  float(s, u, "RELOAD", "info");
   return { ok: true };
 }
 
@@ -681,6 +714,7 @@ export function orderEvac(s: CombatState, u: Unit): OrderResult {
   u.evacuated = true;
   u.ap = 0;
   log(s, "info", `${u.name} evacuates.`);
+  fxUnit(s, u);
   event(s, "evac", u);
   checkOutcome(s);
   return { ok: true };
@@ -703,6 +737,7 @@ export function orderStabilize(s: CombatState, u: Unit, t: Unit): OrderResult {
   spend(s, u);
   t.stabilized = true;
   log(s, "info", `${u.name} stabilizes ${t.name}.`);
+  float(s, t, "STABLE", "bond");
   bark(s, u, "rescue", t);
   event(s, "rescue", u, t, "stabilized");
   noteCourage(s, u);
@@ -727,6 +762,8 @@ export function orderMedkit(s: CombatState, u: Unit, t: Unit): OrderResult {
     t.hp = 2;
     t.ap = 0;
     log(s, "info", `${u.name} gets ${t.name} back on their feet.`);
+    fxUnit(s, t);
+    float(s, t, "REVIVED", "bond");
     bark(s, u, "rescue", t);
     event(s, "rescue", u, t, "revived");
     addFear(s, u, -20);
@@ -734,6 +771,8 @@ export function orderMedkit(s: CombatState, u: Unit, t: Unit): OrderResult {
   } else {
     t.hp = Math.min(t.maxHp, t.hp + 4);
     log(s, "info", `${u.name} patches up ${t === u ? "themself" : t.name}.`);
+    fxUnit(s, t);
+    float(s, t, "+4", "bond");
   }
   return { ok: true };
 }
@@ -757,6 +796,8 @@ export function orderDrag(s: CombatState, u: Unit, t: Unit): OrderResult {
   if (!best) return { ok: false, msg: "nowhere to drag" };
   spend(s, u);
   t.x = best.x; t.y = best.y;
+  fx(s, { k: "place", id: t.id, x: t.x, y: t.y });
+  float(s, u, "DRAG TO COVER", "bond");
   log(s, "bond", `${u.name} grabs ${t.name} by the harness and hauls them into cover.`);
   bark(s, u, "rescue", t);
   event(s, "drag", u, t);
@@ -780,6 +821,7 @@ export function orderSpot(s: CombatState, u: Unit, partner: Unit, t: Unit): Orde
   if (!opt || !spend(s, u)) return { ok: false };
   partner.spot = { targetId: t.id, bonus: opt.bonus };
   log(s, "bond", `${u.name} calls the ${t.name.toLowerCase()} for ${partner.name}. (+${opt.bonus} Aim)`);
+  float(s, t, `SPOTTED +${opt.bonus}`, "bond");
   return { ok: true };
 }
 
@@ -794,6 +836,7 @@ export function orderJam(s: CombatState, u: Unit, t: Unit): OrderResult {
   t.jammed = 1;
   t.overwatch = false;
   log(s, "info", `${u.name} jams the ${t.name.toLowerCase()}'s targeting.`);
+  float(s, t, "JAMMED", "info");
   return { ok: true };
 }
 
@@ -803,6 +846,7 @@ export function orderGrenade(s: CombatState, u: Unit, x: number, y: number): Ord
   u.grenades--;
   u.ap = 0;
   log(s, "info", `${u.name} throws a grenade.`);
+  fx(s, { k: "blast", x, y });
   for (let dy = -1; dy <= 1; dy++)
     for (let dx = -1; dx <= 1; dx++) {
       const px = x + dx, py = y + dy;

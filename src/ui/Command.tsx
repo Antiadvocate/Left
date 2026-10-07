@@ -2,7 +2,27 @@ import { deployable, missionToday, squadMood } from "../game/campaign";
 import { living } from "../game/relations";
 import type { CampaignState, MissionSpec, Settings } from "../game/types";
 import { RefusalReviews } from "./Debrief";
+import { Figure } from "../art/Figure";
 import { EventCard } from "./Night";
+
+/** The roster standing in the hangar: the wounded sit, the AIs stand perfectly still. */
+function Lineup({ st }: { st: CampaignState }) {
+  const people = living(st);
+  const gap = 46, w = Math.max(people.length * gap + 30, 320);
+  return (
+    <svg viewBox={`0 0 ${w} 96`} style={{ width: "100%", height: "auto", display: "block" }} role="img" aria-label="The roster">
+      <rect x={0} y={78} width={w} height={18} fill="#23201a14" />
+      <line x1={0} y1={78} x2={w} y2={78} stroke="#23201a55" strokeWidth={1} />
+      {people.map((s, i) => (
+        <g key={s.id} transform={`translate(${30 + i * gap} 82)`}>
+          <ellipse rx={14} ry={3} fill="#000" opacity={0.18} />
+          <Figure seed={s.id} kind={s.kind} cls={s.class} loadout={s.loadout} pose={s.status === "injured" || s.status === "repair" ? "sit" : s.braced ? "cower" : "stand"} facing={i % 2 ? -1 : 1} armed={s.status === "active"} />
+          <text y={12} textAnchor="middle" style={{ fontFamily: "var(--label)", fontWeight: 700, fontSize: 9, letterSpacing: "0.06em", fill: "#4d463a" }}>{s.callsign.toUpperCase()}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
 
 function moodLabel(m: number): { text: string; cls: string } {
   if (m >= 25) return { text: "The squad follows orders without looking back.", cls: "good" };
@@ -27,8 +47,9 @@ export function CommandView({ st, settings, onDeploy, onEndDay, onChange, onGo }
   return (
     <div className="grid2">
       <div>
-        <div className="panel">
+        <div className="panel clipped">
           <h3>Situation · Day {st.day}</h3>
+          {today && <span className="stamp abs">Threat {today.difficulty}</span>}
           {today ? (
             <>
               <h1 style={{ textTransform: "capitalize" }}>{today.name.replace(/^the /, "")}</h1>
@@ -53,6 +74,10 @@ export function CommandView({ st, settings, onDeploy, onEndDay, onChange, onGo }
             </>
           )}
           {reviews && <p className="small" style={{ color: "var(--accent)", marginTop: 10 }}>A refusal is waiting on Command's decision.</p>}
+        </div>
+        <div className="panel">
+          <h3>Hangar line</h3>
+          <Lineup st={st} />
         </div>
         {reviews && (
           <div className="panel">

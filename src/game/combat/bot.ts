@@ -68,7 +68,8 @@ export function botTurn(s: CombatState) {
 }
 
 export function autoplay(s: CombatState, maxTurns = 40): CombatState {
-  while (!s.outcome && s.turn <= maxTurns) botTurn(s);
+  // nobody is watching a headless game: drop the animation stream as it builds
+  while (!s.outcome && s.turn <= maxTurns) { botTurn(s); s.fx.length = 0; }
   if (!s.outcome) {
     // stalemate: pull out
     s.outcome = "evacuated";

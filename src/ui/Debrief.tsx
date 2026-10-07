@@ -19,7 +19,7 @@ export function RefusalReviews({ st, onChange }: { st: CampaignState; onChange: 
         const s = st.soldiers[r.soldierId];
         if (!s) return null;
         return (
-          <div key={r.soldierId} className="panel" style={{ background: "var(--panel-2)" }}>
+          <div key={r.soldierId} className="panel" style={{ background: "#fff4" }}>
             <div className="soldier-row" style={{ cursor: "default" }}><SoldierLine s={s} /></div>
             <div className="row" style={{ marginTop: 8 }}>
               {CHOICES.map((c) => (
@@ -39,9 +39,9 @@ export function DebriefView({ st, debrief, onChange, onNight }: { st: CampaignSt
   const r = debrief.result;
   return (
     <div className="grid2">
-      <div className="panel">
+      <div className="panel clipped">
         <h3>Debrief</h3>
-        <h1>{r.outcome === "victory" ? "Mission complete" : r.outcome === "evacuated" ? "Squad evacuated" : "Squad lost"}</h1>
+        <div className={`stamp big ${r.outcome === "victory" ? "ok" : ""}`}>{r.outcome === "victory" ? "Mission complete" : r.outcome === "evacuated" ? "Withdrawn" : "Squad lost"}</div>
         <div className="stack" style={{ marginTop: 10 }}>
           {debrief.lines.slice(1).map((l, i) => <div key={i}>{l}</div>)}
         </div>
@@ -56,7 +56,7 @@ export function DebriefView({ st, debrief, onChange, onNight }: { st: CampaignSt
           <h3>Deployed</h3>
           {r.deployed.map((id) => {
             const s = st.soldiers[id];
-            return <div key={id} className="soldier-row" style={{ cursor: "default" }}><SoldierLine s={s} right={<span className="small mono muted">{r.kills[id] ?? 0}k</span>} /></div>;
+            return <div key={id} className="soldier-row" style={{ cursor: "default" }}><SoldierLine s={s} right={r.deadIds.includes(id) ? <span className="stamp" style={{ fontSize: 14 }}>KIA</span> : <span className="small mono muted">{r.kills[id] ?? 0} kills</span>} /></div>;
           })}
         </div>
       </div>

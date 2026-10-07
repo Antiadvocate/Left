@@ -5,7 +5,7 @@ import { recall } from "../game/memory";
 import { edge, living, mutualTier, pairActions } from "../game/relations";
 import { RANKS } from "../game/roster";
 import type { CampaignState, Soldier } from "../game/types";
-import { HabitLine, KindTag, StatusTag, Token } from "./common";
+import { HabitLine, KindTag, Standee, StatusTag, Token } from "./common";
 import { EventCard } from "./Night";
 
 export function BarracksView({ st, analyst, onChange }: { st: CampaignState; analyst: boolean; onChange: () => void }) {
@@ -44,7 +44,7 @@ export function BarracksView({ st, analyst, onChange }: { st: CampaignState; ana
                           else if (s) setSel(s.id);
                         }}
                       >
-                        {s ? <><Token s={s} /><span style={{ flex: 1 }}>{s.callsign}</span><StatusTag s={s} /></> : <span className="dim">empty</span>}
+                        {s ? <><Token s={s} size={32} /><span style={{ flex: 1 }}>{s.callsign}</span><StatusTag s={s} /></> : <span className="dim">empty</span>}
                         <span className="bid">{b}</span>
                       </div>
                     );
@@ -67,15 +67,16 @@ function Dossier({ st, s, analyst }: { st: CampaignState; s: Soldier; analyst: b
   const seen = st.nightLog.slice(-10).flatMap((r) => r.events.filter((e) => e.participants.includes(s.id))).slice(-5).reverse();
   return (
     <>
-      <div className="panel">
-        <div className="row">
-          <Token s={s} />
-          <div style={{ flex: 1 }}>
-            <h2 style={{ margin: 0 }}>{s.name}</h2>
+      <div className="panel clipped">
+        <div className="dossier-head">
+          <Token s={s} size={96} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="label">Personnel file</div>
+            <h2 style={{ margin: "2px 0 4px" }}>{s.name}</h2>
             <div className="small muted">{RANKS[s.rank]} · {CLASSES[s.class].name} · {s.missions} missions · {s.kills} kills</div>
+            <div className="row" style={{ marginTop: 6 }}><KindTag s={s} /><StatusTag s={s} /></div>
           </div>
-          <KindTag s={s} />
-          <StatusTag s={s} />
+          <Standee s={s} height={130} pose={s.status === "injured" || s.status === "repair" ? "sit" : "stand"} facing={-1} />
         </div>
         <div className="row small mono" style={{ marginTop: 10, gap: 14 }}>
           <span>AIM {s.stats.aim}</span><span>HP {s.stats.hp}</span><span>MOB {s.stats.mobility}</span><span>DEF {s.stats.defense}</span><span>TECH {s.stats.tech}</span>

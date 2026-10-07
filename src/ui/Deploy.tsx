@@ -3,7 +3,9 @@ import { combatPairs, deployable, splitBonds, squadMood } from "../game/campaign
 import { startCombat } from "../game/combat/engine";
 import type { CombatState } from "../game/combat/types";
 import type { CampaignState, MissionSpec } from "../game/types";
-import { SoldierLine } from "./common";
+import { CLASSES } from "../game/content";
+import { RANKS } from "../game/roster";
+import { KindTag, Standee } from "./common";
 
 export function DeployView({ st, spec, onCancel, onLaunch }: { st: CampaignState; spec: MissionSpec; onCancel: () => void; onLaunch: (c: CombatState) => void }) {
   const ready = deployable(st);
@@ -27,13 +29,17 @@ export function DeployView({ st, spec, onCancel, onLaunch }: { st: CampaignState
           <span className="small mono muted">{picked.length}/6 · {heavy} heavy / {picked.length - heavy} light</span>
         </div>
         <p className="small muted">Going all heavy or all light beats an enemy that adapts to the middle, but it can mean benching half of a pair.</p>
-        {ready.map((s) => {
-          const on = picked.includes(s.id);
-          return (
-            <div key={s.id} className={`soldier-row ${on ? "sel" : ""}`} onClick={() => toggle(s.id)}>
-              <SoldierLine
-                s={s}
-                right={
+        <div className="grid3">
+          {ready.map((s) => {
+            const on = picked.includes(s.id);
+            return (
+              <div key={s.id} className={`deploy-card ${on ? "on" : ""}`} onClick={() => toggle(s.id)}>
+                {on && <span className="stamp tick" style={{ fontSize: 12, padding: "0 5px" }}>Go</span>}
+                <Standee s={s} height={118} pose={on ? "ready" : "stand"} />
+                <div className="name">{s.callsign}</div>
+                <div className="small muted">{RANKS[s.rank]} · {CLASSES[s.class].name}</div>
+                <div className="row" style={{ marginTop: 6, justifyContent: "space-between" }}>
+                  <KindTag s={s} />
                   <button
                     className={`btn small ${s.loadout === "heavy" ? "on" : ""}`}
                     onClick={(e) => { e.stopPropagation(); s.loadout = s.loadout === "heavy" ? "light" : "heavy"; setTick((t) => t + 1); }}
@@ -41,11 +47,11 @@ export function DeployView({ st, spec, onCancel, onLaunch }: { st: CampaignState
                   >
                     {s.loadout}
                   </button>
-                }
-              />
-            </div>
-          );
-        })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
       <div>
         <div className="panel">

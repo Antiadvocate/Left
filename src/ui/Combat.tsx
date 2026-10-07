@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { bondAction, CLASSES, ENEMY_TYPES } from "../game/content";
+import { Portrait, type Expression } from "../art/Portrait";
+import { bondAction, CLASSES } from "../game/content";
 import {
   assessRisk, dragTargets, endTurn, jamTargets, mayRefuse, medkitTargets, moveOptions, orderDrag, orderEvac, orderGrenade, orderJam,
   orderMedkit, orderMove, orderOverwatch, orderReload, orderShoot, orderSpot, orderStabilize, pairOf, spotTargets, squadUnits,
@@ -8,10 +9,11 @@ import {
 import { alive, canAct, shotInfo, WEAPONS } from "../game/combat/rules";
 import type { CombatState, Unit } from "../game/combat/types";
 import type { CampaignState } from "../game/types";
-import { initials } from "./common";
+import { Board } from "./Board";
+import { useFxPlayer } from "./useFx";
 
 type Mode = { kind: "move" } | { kind: "grenade" } | { kind: "spot"; partnerId: string };
-interface Confirm { title: string; body: string; ok: string; run: () => void }
+interface Confirm { title: string; body: string; ok: string; run: () => void; who?: Unit; hit?: number }
 
 const FEAR_LABEL = { steady: "Steady", shaken: "Shaken", terrified: "Terrified" } as const;
 
@@ -21,8 +23,10 @@ export function CombatView({ c, st, analyst, onChange, onDone }: { c: CombatStat
   const [mode, setMode] = useState<Mode>({ kind: "move" });
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
+  const [speed, setSpeed] = useState(1);
+  const player = useFxPlayer(c, speed);
   const sel = c.units.find((u) => u.id === selId && u.side === "squad");
-  const myTurn = c.side === "squad" && !c.outcome;
+  const myTurn = c.side === "squad" && !c.outcome && !player.busy;
 
   const after = () => {
     onChange();
@@ -32,6 +36,7 @@ export function CombatView({ c, st, analyst, onChange, onDone }: { c: CombatStat
       if (next) setSelId(next.id);
     }
     setTick((t) => t + 1);
+    void player.play().then(() => setTick((t) => t + 1));
   };
 
   const moves = sel && myTurn ? moveOptions(c, sel) : [];
@@ -45,9 +50,9 @@ export function CombatView({ c, st, analyst, onChange, onDone }: { c: CombatStat
     const risk = assessRisk(c, sel, { x, y });
     const go = () => { orderMove(c, sel, x, y); after(); };
     if (mayRefuse(sel, risk)) {
-      setConfirm({ title: `${sel.name} is terrified`, body: `That position is in the open. ${sel.name} may refuse the order and hold where they are.`, ok: "Order it anyway", run: go });
+      setConfirm({ title: `${sel.name} is terrified`, body: `That position is in the open. ${sel.name} may refuse the order and hold where they are.`, ok: "Order it anyway", run: go, who: sel });
     } else if (sel.kind === "ai" && risk.suicide) {
-      setConfirm({ title: "Into the open", body: `${risk.exposedTo} guns will have a clear line on ${sel.name}. It won't refuse. The people close to it will see Command send it.`, ok: "Send it", run: go });
+      setConfirm({ title: "Into the open", body: `${risk.exposedTo} guns will have a clear line on ${sel.name}. It won't refuse. The people close to it will see Command send it.`, ok: "Send it", run: go, who: sel });
     } else go();
   };
 
@@ -59,6 +64,8 @@ export function CombatView({ c, st, analyst, onChange, onDone }: { c: CombatStat
       body: `${info.hit}% to hit · ${info.crit}% crit · ${WEAPONS[sel.weapon].name} ${sel.dmg[0]}–${sel.dmg[1]}\n${info.notes.join(" · ")}`,
       ok: "Fire",
       run: () => { orderShoot(c, sel, t); after(); },
+      who: sel,
+      hit: info.hit,
     });
   };
 
@@ -81,36 +88,30 @@ export function CombatView({ c, st, analyst, onChange, onDone }: { c: CombatStat
     if (moveMap.has(`${x},${y}`)) tryMove(x, y);
   };
 
-  const grenadeArea = mode.kind === "grenade" && hover ? hover : null;
-  const risky = (x: number, y: number) => !!sel && moveMap.has(`${x},${y}`) && assessRisk(c, sel, { x, y }).highRisk;
-
-  const tiles = [];
-  for (let y = 0; y < c.h; y++)
-    for (let x = 0; x < c.w; x++) {
-      const kind = c.tiles[y * c.w + x];
-      const m = moveMap.get(`${x},${y}`);
-      const evac = c.evac.some((p) => p.x === x && p.y === y);
-      const blast = grenadeArea && Math.abs(grenadeArea.x - x) <= 1 && Math.abs(grenadeArea.y - y) <= 1;
-      const u = c.units.find((v) => !v.dead && !v.evacuated && v.x === x && v.y === y && visible(v));
-      const cls = ["tile", kind, evac ? "evac" : "", mode.kind === "move" && m ? (m.ap === 1 ? "m1" : "m2") : "", mode.kind === "move" && m && hover?.x === x && hover?.y === y && risky(x, y) ? "risk" : "", blast ? "blast" : ""].join(" ");
-      tiles.push(
-        <div key={`${x},${y}`} className={cls} onClick={() => clickTile(x, y)} onMouseEnter={() => setHover({ x, y })}>
-          {u && <UnitToken u={u} sel={u.id === selId} target={targetIds.has(u.id)} />}
-          {u && <div className={`hpbar ${u.side === "accord" ? "enemy" : ""}`}><i style={{ width: `${(u.hp / u.maxHp) * 100}%` }} /></div>}
-        </div>,
-      );
-    }
+  const riskAt = (x: number, y: number) => !!sel && assessRisk(c, sel, { x, y }).highRisk;
+  const showOutcome = c.outcome && !player.busy;
 
   return (
     <div className="combat">
       <div className="c-board">
-        <div className="spread" style={{ marginBottom: 8 }}>
-          <div className="mono small">
-            <span style={{ textTransform: "uppercase" }}>{c.missionName}</span> · TURN {c.turn} · {c.outcome ? c.outcome.toUpperCase() : myTurn ? "COMMAND" : "ACCORD"}
+        <div className="board-head">
+          <div>
+            <div className="stencil small-stencil">{c.missionName.replace(/^the /, "")}</div>
+            <div className="label">Turn {c.turn} · {c.outcome ? c.outcome : c.side === "squad" ? "Command" : "Accord"}</div>
           </div>
-          <div className="small muted">{mode.kind === "grenade" ? "Pick a tile to throw at." : mode.kind === "spot" ? "Pick a target to call." : "Teal: one action. Amber: dash."}</div>
+          <div className="row">
+            <span className="label">{mode.kind === "grenade" ? "Pick a tile to throw at" : mode.kind === "spot" ? "Pick a target to call" : "Blue: one action · Ochre: dash"}</span>
+            <button className="btn small" onClick={() => setSpeed(speed === 1 ? 2 : speed === 2 ? 4 : 1)}>{speed}× speed</button>
+          </div>
         </div>
-        <div className="board" style={{ gridTemplateColumns: `repeat(${c.w}, 1fr)` }} onMouseLeave={() => setHover(null)}>{tiles}</div>
+        <div className="board-wrap">
+          <Board
+            c={c} disp={player.disp} effects={player.effects} revealed={player.revealed} selId={selId}
+            moveMap={moveMap} targetIds={targetIds} hover={hover} riskAt={riskAt} grenade={mode.kind === "grenade"} busy={player.busy}
+            onTile={clickTile} onHover={setHover}
+          />
+          {player.banner && <div className={`turn-banner ${player.banner.startsWith("Accord") ? "enemy" : ""}`}>{player.banner}</div>}
+        </div>
       </div>
       <div className="c-log">
         <div className="panel">
@@ -125,27 +126,29 @@ export function CombatView({ c, st, analyst, onChange, onDone }: { c: CombatStat
         </div>
       </div>
       <div className="c-side">
-        {c.outcome ? (
+        {showOutcome ? (
           <div className="panel">
             <h3>Mission over</h3>
-            <h2>{c.outcome === "victory" ? "Hostiles cleared." : c.outcome === "evacuated" ? "Squad evacuated." : "Squad lost."}</h2>
+            <div className={`stamp big ${c.outcome === "victory" ? "ok" : ""}`}>{c.outcome === "victory" ? "Cleared" : c.outcome === "evacuated" ? "Withdrawn" : "Lost"}</div>
+            <p className="report">{c.outcome === "victory" ? "Hostiles cleared." : c.outcome === "evacuated" ? "Squad evacuated. The Accord holds the field." : "No one is answering on the squad channel."}</p>
             <button className="btn primary" onClick={onDone}>Debrief</button>
           </div>
         ) : sel ? (
-          <SelectedPanel c={c} u={sel} st={st} analyst={analyst} targets={targets.map((t) => t.unit)} onShoot={tryShoot} setMode={setMode} mode={mode} after={after} />
+          <SelectedPanel c={c} u={sel} st={st} analyst={analyst} targets={myTurn ? targets.map((t) => t.unit) : []} onShoot={tryShoot} setMode={setMode} mode={mode} after={after} locked={!myTurn} />
         ) : null}
         <div className="panel">
           <div className="spread">
             <h3>Squad</h3>
             {myTurn && <button className="btn small primary" onClick={() => { endTurn(c); after(); }}>End turn</button>}
+            {player.busy && <span className="label">…</span>}
           </div>
           {squadUnits(c).map((u) => (
             <div key={u.id} className={`soldier-row ${u.id === selId ? "sel" : ""}`} onClick={() => { setSelId(u.id); setMode({ kind: "move" }); }}>
-              <span className={`token ${u.kind} ${u.fearState !== "steady" ? u.fearState : ""} ${u.dead ? "dead" : ""}`}>{initials(u.name)}</span>
+              <Portrait seed={u.soldierId!} kind={u.kind!} cls={u.cls!} expression={unitExpression(u)} size={34} />
               <div style={{ flex: 1 }}>
                 <div className="name">{u.name}</div>
                 <div className="small muted">
-                  {u.dead ? "KIA" : u.evacuated ? "Evacuated" : u.downed ? (u.stabilized ? "Down, stable" : `Bleeding out (${u.bleed})`) : `${u.hp}/${u.maxHp} HP · ${u.kind === "human" ? FEAR_LABEL[u.fearState] : "—"}`}
+                  {u.dead ? "KIA" : u.evacuated ? "Evacuated" : u.downed ? (u.stabilized ? "Down, stable" : `Bleeding out (${u.bleed})`) : `${u.hp}/${u.maxHp} HP · ${u.kind === "human" ? FEAR_LABEL[u.fearState] : "Commons"}`}
                 </div>
               </div>
               {canAct(u) && <span className="pips">{[0, 1].map((i) => <i key={i} className={u.ap > i ? "on" : ""} />)}</span>}
@@ -157,9 +160,15 @@ export function CombatView({ c, st, analyst, onChange, onDone }: { c: CombatStat
       {confirm && (
         <div className="modal-back" onClick={() => setConfirm(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>{confirm.title}</h2>
-            <p style={{ whiteSpace: "pre-line" }} className="small">{confirm.body}</p>
-            <div className="row">
+            <div className="row" style={{ alignItems: "flex-start", gap: 14 }}>
+              {confirm.who && <Portrait seed={confirm.who.soldierId!} kind={confirm.who.kind!} cls={confirm.who.cls!} expression={unitExpression(confirm.who)} size={70} />}
+              <div style={{ flex: 1 }}>
+                <h2>{confirm.title}</h2>
+                {confirm.hit !== undefined && <div className="hit-big">{confirm.hit}<span>%</span></div>}
+                <p style={{ whiteSpace: "pre-line" }} className="small">{confirm.body}</p>
+              </div>
+            </div>
+            <div className="row" style={{ marginTop: 10 }}>
               <button className="btn primary" onClick={() => { const r = confirm.run; setConfirm(null); r(); }}>{confirm.ok}</button>
               <button className="btn" onClick={() => setConfirm(null)}>Cancel</button>
             </div>
@@ -170,19 +179,18 @@ export function CombatView({ c, st, analyst, onChange, onDone }: { c: CombatStat
   );
 }
 
-function UnitToken({ u, sel, target }: { u: Unit; sel: boolean; target: boolean }) {
-  if (u.side === "accord") {
-    const t = ENEMY_TYPES[u.enemyType!];
-    return <div className={`unit enemy ${u.active ? "" : "inactive"} ${target ? "target" : ""}`} title={`${t.name} ${u.hp}/${u.maxHp}${u.jammed ? " (jammed)" : ""}`}><span>{t.glyph}</span>{u.overwatch && <span className="ow">◉</span>}</div>;
-  }
-  const cls = ["unit", u.kind, u.downed ? "downed" : u.fearState !== "steady" ? u.fearState : "", sel ? "sel" : ""].join(" ");
-  return <div className={cls} title={u.name}>{u.downed ? "✚" : initials(u.name)}{u.overwatch && <span className="ow">◉</span>}</div>;
+export function unitExpression(u: Unit): Expression {
+  if (u.dead) return "dead";
+  if (u.kind === "ai") return u.downed ? "grief" : "calm";
+  if (u.downed || u.fearState === "terrified") return "afraid";
+  if (u.fearState === "shaken") return "tense";
+  return "calm";
 }
 
-function SelectedPanel({ c, u, st, analyst, targets, onShoot, setMode, mode, after }: {
-  c: CombatState; u: Unit; st: CampaignState; analyst: boolean; targets: Unit[]; onShoot: (t: Unit) => void; setMode: (m: Mode) => void; mode: Mode; after: () => void;
+function SelectedPanel({ c, u, st, analyst, targets, onShoot, setMode, mode, after, locked }: {
+  c: CombatState; u: Unit; st: CampaignState; analyst: boolean; targets: Unit[]; onShoot: (t: Unit) => void; setMode: (m: Mode) => void; mode: Mode; after: () => void; locked: boolean;
 }) {
-  const myTurn = c.side === "squad" && !c.outcome;
+  const myTurn = c.side === "squad" && !c.outcome && !locked;
   const act = myTurn && canAct(u) && u.ap > 0;
   const stab = act ? stabilizeTargets(c, u) : [];
   const meds = act ? medkitTargets(c, u) : [];
@@ -196,8 +204,9 @@ function SelectedPanel({ c, u, st, analyst, targets, onShoot, setMode, mode, aft
 
   return (
     <div className="panel">
-      <div className="spread">
-        <div>
+      <div className="row" style={{ alignItems: "flex-start" }}>
+        <Portrait seed={u.soldierId!} kind={u.kind!} cls={u.cls!} expression={unitExpression(u)} size={58} />
+        <div style={{ flex: 1 }}>
           <h2 style={{ margin: 0 }}>{u.name}</h2>
           <div className="small muted">{CLASSES[u.cls!].name} · {u.loadout} · {WEAPONS[u.weapon].name} {u.ammo}/{u.clip}</div>
         </div>

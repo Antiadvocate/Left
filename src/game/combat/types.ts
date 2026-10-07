@@ -76,7 +76,19 @@ export interface PairInfo {
   scale: Record<string, number>; // per soldier id: how fully a human feels the bond right now (AI = 1)
 }
 
+/** Animation stream: the engine resolves instantly; the board replays these in order. */
+export type Fx =
+  | { k: "step"; id: string; x: number; y: number }
+  | { k: "place"; id: string; x: number; y: number }
+  | { k: "shot"; from: string; to: string; hit: boolean; dmg: number; crit: boolean }
+  | { k: "unit"; id: string; hp: number; downed: boolean; dead: boolean; evacuated: boolean }
+  | { k: "bark"; id: string; text: string }
+  | { k: "float"; id: string; text: string; tone: "warn" | "bond" | "habit" | "info" }
+  | { k: "blast"; x: number; y: number }
+  | { k: "turn"; side: Side };
+
 export interface CombatState {
+  fx: Fx[];
   missionId: string;
   missionName: string;
   w: number;
